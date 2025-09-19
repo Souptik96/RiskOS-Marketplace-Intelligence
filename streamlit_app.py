@@ -14,7 +14,9 @@ st.caption("Tip: set an environment variable API_URL to point at your deployed A
 @st.cache_data
 def load_df():
     # expects data/daily_product_sales.csv (see CSV content below)
-    return pd.read_csv("data/daily_product_sales.csv", parse_dates=["day"])
+    df = pd.read_csv("data/daily_product_sales.csv", parse_dates=["day"])
+    df["day"] = df["day"].dt.date        # <-- force DATE (not TIMESTAMP)
+    return df
 
 def parse_nl_to_sql(q: str) -> str:
     """Very small heuristic parser for demo purposes (top N, category, quarter)."""
