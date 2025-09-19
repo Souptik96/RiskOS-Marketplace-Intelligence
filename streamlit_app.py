@@ -70,7 +70,6 @@ def load_df() -> pd.DataFrame:
     df["day"] = pd.to_datetime(df["day"]).dt.date  # ensure DATE not TIMESTAMP
     return df[["product_title", "category", "day", "units", "revenue"]]
 
-
 def run_local(sql: str) -> pd.DataFrame:
     con = duckdb.connect()
     con.register(TABLE, load_df())
@@ -170,6 +169,26 @@ def extract_sql(text: str) -> str:
     m = re.search(r"(?is)\b(select|with)\b.*", text)
     return m.group(0).strip() if m else text.strip()
 
+def enforce_table(sql: str, table: str = "daily_product_sales") -> str:
+    s = sql.strip().strip(";")
+    low = s.lower()
+    if table in low:
+        return s
+    # replace first top-level FROM <ident> [...] with our table (keep alias if present)
+    m = re.search(r"(?is)\bfrom\s+([a-zA-Z_][\w\.\"`]*)\s*(?:as\s+([a-zA-Z_]\w*))?", s)
+    if m and not m.group(1).strip().startswith("("):
+        alias = m.group(2) or ""
+        prefix, suffix = s[:m.start()], s[m.end():]
+        return f"{prefix}FROM {table} {alias} {suffix}".strip()
+
+    # if no FROM found, inject before WHERE/GROUP/ORDER/LIMIT (or at end)
+    cut = len(s)
+    for kw in [" where ", "\nwhere ", " group ", "\ngroup ", " order ", "\norder ", " limit ", "\nlimit "]:
+        p = low.find(kw)
+        if p != -1:
+            cut = min(cut, p)
+    return (s[:cut] + f" FROM {table} " + s[cut:]).strip()
+
 def sanitize_sql(sql: str) -> str:
     s = sql.strip().strip(";")
     low = s.lower()
@@ -212,7 +231,8 @@ if st.button("Run"):
                 st.info("Detected natural language — routing to heuristic.")
                 sql = parse_nl_to_sql(q)
             else:
-                sql = sanitize_sql(q)
+                sql = enforce_table(q)
+                sql = sanitize_sql(sql)
             st.subheader("SQL")
             st.code(sql, language="sql")
             df = run_local(sql)
@@ -228,13 +248,15 @@ if st.button("Run"):
             )
             gen = get_llm()(prompt, max_new_tokens=180, do_sample=False, num_beams=1)[0]["generated_text"]
             sql = extract_sql(gen)
+            sql = enforce_table(sql)
             try:
                 sql = sanitize_sql(sql)
             except Exception:
                 # retry with stricter instruction
                 prompt2 = "ONLY SQL. FIRST CHAR MUST BE S or W.\n" + prompt
                 gen2 = get_llm()(prompt2, max_new_tokens=160, do_sample=False, num_beams=1)[0]["generated_text"]
-                sql = sanitize_sql(extract_sql(gen2))
+                sql = enforce_table(extract_sql(gen2))
+                sql = sanitize_sql(sql)
             st.subheader("SQL (from LLM)")
             st.code(sql, language="sql")
             df = run_local(sql)
