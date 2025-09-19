@@ -1,5 +1,4 @@
-# ---------- MUST come before importing streamlit/transformers ----------
-# Put every cache/config in a writable place on Spaces/Docker
+# ---------- set writable caches BEFORE importing streamlit/transformers ----------
 import os
 os.environ.setdefault("HOME", "/tmp")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
@@ -18,16 +17,18 @@ for d in [
     os.environ["STREAMLIT_USER_SETTINGS_DIR"],
 ]:
     os.makedirs(d, exist_ok=True)
-# ----------------------------------------------------------------------
+with open(os.path.join(os.environ["STREAMLIT_USER_SETTINGS_DIR"], "config.toml"), "w") as f:
+    f.write("[browser]\ngatherUsageStats = false\n")
+# -------------------------------------------------------------------------------
 
 import re
-import requests
+import requests  # optional, kept for future remote API calls
 import pandas as pd
 import duckdb
 import streamlit as st
 
-# ---------- App config ----------
 st.set_page_config(page_title="🛒 Marketplace Intelligence", layout="wide")
+
 TABLE = "daily_product_sales"
 COLS = ["product_title", "category", "day", "units", "revenue"]
 SCHEMA_TEXT = (
@@ -35,13 +36,12 @@ SCHEMA_TEXT = (
     "day DATE, units INT, revenue DOUBLE)."
 )
 
-# ---------- Data ----------
+# ----------------------------- data loading -----------------------------
 @st.cache_data
 def load_df() -> pd.DataFrame:
-    """Load CSV; force day as DATE. Generate tiny fallback if missing."""
+    """Load CSV; ensure 'day' is DATE; create tiny fallback if missing."""
     path = "data/daily_product_sales.csv"
     if not os.path.exists(path):
-        # tiny fallback so the Space still runs
         import numpy as np
         os.makedirs("data", exist_ok=True)
         rng = np.random.default_rng(7)
@@ -67,7 +67,7 @@ def load_df() -> pd.DataFrame:
         daily.to_csv(path, index=False)
 
     df = pd.read_csv(path, parse_dates=["day"])
-    df["day"] = pd.to_datetime(df["day"]).dt.date  # ensure DATE (not timestamp)
+    df["day"] = pd.to_datetime(df["day"]).dt.date  # ensure DATE not TIMESTAMP
     return df[["product_title", "category", "day", "units", "revenue"]]
 
 
@@ -76,15 +76,13 @@ def run_local(sql: str) -> pd.DataFrame:
     con.register(TABLE, load_df())
     return con.execute(sql).df()
 
-
-# ---------- Heuristic NL → SQL with window patterns ----------
+# --------------------------- heuristic NL → SQL --------------------------
 def parse_nl_to_sql(q: str) -> str:
     ql = q.lower()
     topn = 5
     for tok in q.split():
         if tok.isdigit():
-            topn = int(tok)
-            break
+            topn = int(tok); break
 
     cat = next((c for c in ["electronics", "home", "beauty", "sports", "toys"] if c in ql), None)
     quarter = next((f"Q{n}" for n in [1, 2, 3, 4] if f"q{n}" in ql), None)
@@ -136,7 +134,7 @@ GROUP BY day, category
 ORDER BY day ASC;
 """
 
-    # rank / top by category
+    # rank / top
     if "rank" in ql or "top" in ql:
         return f"""
 WITH g AS (
@@ -162,21 +160,29 @@ ORDER BY revenue DESC
 LIMIT {topn};
 """
 
+# ---------------------------- SQL safety helpers -------------------------
+def extract_sql(text: str) -> str:
+    """Pull SQL from LLM output: prefer ```sql fences```, else first SELECT/WITH."""
+    m = re.search(r"```sql\s*(.*?)```", text, flags=re.I | re.S)
+    if m: return m.group(1).strip().rstrip(";")
+    m = re.search(r"```(.*?)```", text, flags=re.S)
+    if m: text = m.group(1)
+    m = re.search(r"(?is)\b(select|with)\b.*", text)
+    return m.group(0).strip() if m else text.strip()
 
-# ---------- Manual SQL safety ----------
 def sanitize_sql(sql: str) -> str:
     s = sql.strip().strip(";")
-    if not re.match(r"(?is)^\s*select\b", s):
-        raise ValueError("Only SELECT queries are allowed.")
+    low = s.lower()
+    if not (low.startswith("select") or low.startswith("with")):
+        raise ValueError("Only SELECT/CTE queries are allowed.")
     banned = r"(?is)\b(drop|delete|update|insert|merge|create|alter|truncate|attach|copy|vacuum)\b"
-    if re.search(banned, s):
+    if re.search(banned, low):
         raise ValueError("Dangerous statement blocked.")
-    if TABLE not in s.lower():
-        raise ValueError(f"Query must reference '{TABLE}'.")
+    if "daily_product_sales" not in low:
+        raise ValueError("Query must reference 'daily_product_sales'.")
     return s
 
-
-# ---------- Lazy LLM loader ----------
+# --------------------------- lazy LLM loader -----------------------------
 @st.cache_resource
 def get_llm():
     try:
@@ -185,13 +191,12 @@ def get_llm():
         raise RuntimeError(
             "LLM deps missing. Add to requirements: transformers, sentencepiece, torch (CPU)."
         ) from e
-    model_id = "google/flan-t5-small"  # free, public
+    model_id = "google/flan-t5-small"  # free/public
     tok = AutoTokenizer.from_pretrained(model_id)
     mdl = AutoModelForSeq2SeqLM.from_pretrained(model_id)
     return pipeline("text2text-generation", model=mdl, tokenizer=tok)
 
-
-# ---------- UI ----------
+# --------------------------------- UI -----------------------------------
 st.title("🛒 Marketplace Intelligence — NL→SQL (Heuristic / LLM) or Raw SQL")
 mode = st.radio("Engine", ["Local Heuristic", "LLM (flan-t5-small)", "SQL (manual)"])
 q = st.text_input(
@@ -202,7 +207,12 @@ q = st.text_input(
 if st.button("Run"):
     try:
         if mode == "SQL (manual)":
-            sql = sanitize_sql(q)
+            # if user pasted NL, route to heuristic; else sanitize
+            if not re.match(r"(?is)^\s*(select|with)\b", q.strip()):
+                st.info("Detected natural language — routing to heuristic.")
+                sql = parse_nl_to_sql(q)
+            else:
+                sql = sanitize_sql(q)
             st.subheader("SQL")
             st.code(sql, language="sql")
             df = run_local(sql)
@@ -213,14 +223,18 @@ if st.button("Run"):
 
         elif mode == "LLM (flan-t5-small)":
             prompt = (
-                f"Generate DuckDB SQL for this question ONLY using {SCHEMA_TEXT} "
-                "and data from year 2024. Return ONLY the SQL without explanation.\nQ: " + q
+                f"Return ONLY DuckDB SQL (no prose/backticks). "
+                f"Start with SELECT or WITH. Use {SCHEMA_TEXT} and year 2024.\nQ: {q}"
             )
-            out = get_llm()(prompt, max_new_tokens=180)[0]["generated_text"]
-            sel = out.lower().find("select")
-            if sel < 0:
-                raise ValueError("LLM did not return SQL starting with SELECT.")
-            sql = sanitize_sql(out[sel:])
+            gen = get_llm()(prompt, max_new_tokens=180, do_sample=False, num_beams=1)[0]["generated_text"]
+            sql = extract_sql(gen)
+            try:
+                sql = sanitize_sql(sql)
+            except Exception:
+                # retry with stricter instruction
+                prompt2 = "ONLY SQL. FIRST CHAR MUST BE S or W.\n" + prompt
+                gen2 = get_llm()(prompt2, max_new_tokens=160, do_sample=False, num_beams=1)[0]["generated_text"]
+                sql = sanitize_sql(extract_sql(gen2))
             st.subheader("SQL (from LLM)")
             st.code(sql, language="sql")
             df = run_local(sql)
