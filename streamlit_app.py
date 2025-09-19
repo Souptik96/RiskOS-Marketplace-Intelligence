@@ -1,15 +1,16 @@
 import os, re, requests, pandas as pd, duckdb, streamlit as st
 
-# ensure HF/Transformers use writable paths even outside Docker
-os.environ.setdefault("XDG_CACHE_HOME", "./.cache")
-os.environ.setdefault("HF_HOME", "./.cache/hf")
-os.environ.setdefault("HF_HUB_CACHE", "./.cache/hf/hub")
-os.environ.setdefault("TRANSFORMERS_CACHE", "./.cache/transformers")
-os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
-os.makedirs("./.cache/transformers", exist_ok=True)
-os.makedirs("./.cache/hf/hub", exist_ok=True)
-os.makedirs("./.streamlit", exist_ok=True)
-with open("./.streamlit/config.toml","w") as f:
+import os
+home = os.path.expanduser("~")
+os.environ.setdefault("XDG_CACHE_HOME", os.path.join(home, ".cache"))
+os.environ.setdefault("HF_HOME", os.path.join(home, ".cache", "hf"))
+os.environ.setdefault("HF_HUB_CACHE", os.path.join(home, ".cache", "hf", "hub"))
+os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(home, ".cache", "transformers"))
+os.environ.setdefault("STREAMLIT_USER_SETTINGS_DIR", os.path.join(home, ".streamlit"))
+for d in [os.environ["XDG_CACHE_HOME"], os.environ["HF_HUB_CACHE"],
+          os.environ["TRANSFORMERS_CACHE"], os.environ["STREAMLIT_USER_SETTINGS_DIR"]]:
+    os.makedirs(d, exist_ok=True)
+with open(os.path.join(os.environ["STREAMLIT_USER_SETTINGS_DIR"], "config.toml"), "w") as f:
     f.write("[browser]\ngatherUsageStats = false\n")
 
 st.set_page_config(page_title="🛒 Marketplace Intelligence", layout="wide")
