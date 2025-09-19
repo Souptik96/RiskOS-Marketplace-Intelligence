@@ -1,17 +1,21 @@
-import os, re, requests, pandas as pd, duckdb, streamlit as st
-
 import os
-home = os.path.expanduser("~")
-os.environ.setdefault("XDG_CACHE_HOME", os.path.join(home, ".cache"))
-os.environ.setdefault("HF_HOME", os.path.join(home, ".cache", "hf"))
-os.environ.setdefault("HF_HUB_CACHE", os.path.join(home, ".cache", "hf", "hub"))
-os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(home, ".cache", "transformers"))
-os.environ.setdefault("STREAMLIT_USER_SETTINGS_DIR", os.path.join(home, ".streamlit"))
-for d in [os.environ["XDG_CACHE_HOME"], os.environ["HF_HUB_CACHE"],
-          os.environ["TRANSFORMERS_CACHE"], os.environ["STREAMLIT_USER_SETTINGS_DIR"]]:
+os.environ["HOME"] = "/tmp"
+os.environ["XDG_CACHE_HOME"] = "/tmp/.cache"
+os.environ["HF_HOME"] = "/tmp/.cache/hf"
+os.environ["HF_HUB_CACHE"] = "/tmp/.cache/hf/hub"
+os.environ["TRANSFORMERS_CACHE"] = "/tmp/.cache/transformers"
+os.environ["TORCH_HOME"] = "/tmp/.cache/torch"
+os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+os.environ["STREAMLIT_USER_SETTINGS_DIR"] = "/tmp/.streamlit"
+
+for d in [
+    os.environ["XDG_CACHE_HOME"], os.environ["HF_HOME"], os.environ["HF_HUB_CACHE"],
+    os.environ["TRANSFORMERS_CACHE"], os.environ["TORCH_HOME"], os.environ["STREAMLIT_USER_SETTINGS_DIR"]
+]:
     os.makedirs(d, exist_ok=True)
-with open(os.path.join(os.environ["STREAMLIT_USER_SETTINGS_DIR"], "config.toml"), "w") as f:
-    f.write("[browser]\ngatherUsageStats = false\n")
+
+import requests, pandas as pd, duckdb # type: ignore
+import streamlit as st # type: ignore
 
 st.set_page_config(page_title="🛒 Marketplace Intelligence", layout="wide")
 API_URL = os.getenv("API_URL")
