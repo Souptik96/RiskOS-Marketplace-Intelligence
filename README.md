@@ -10,7 +10,7 @@ tags:
 - duckdb
 - nl2sql
 pinned: false
-short_description: Ask sales questions in natural language → see SQL + results + citations.
+short_description: NL → see SQL + results + citations.
 license: mit
 ---
 
