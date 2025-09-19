@@ -1,5 +1,17 @@
 import os, re, requests, pandas as pd, duckdb, streamlit as st
 
+# ensure HF/Transformers use writable paths even outside Docker
+os.environ.setdefault("XDG_CACHE_HOME", "./.cache")
+os.environ.setdefault("HF_HOME", "./.cache/hf")
+os.environ.setdefault("HF_HUB_CACHE", "./.cache/hf/hub")
+os.environ.setdefault("TRANSFORMERS_CACHE", "./.cache/transformers")
+os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
+os.makedirs("./.cache/transformers", exist_ok=True)
+os.makedirs("./.cache/hf/hub", exist_ok=True)
+os.makedirs("./.streamlit", exist_ok=True)
+with open("./.streamlit/config.toml","w") as f:
+    f.write("[browser]\ngatherUsageStats = false\n")
+
 st.set_page_config(page_title="🛒 Marketplace Intelligence", layout="wide")
 API_URL = os.getenv("API_URL")
 
@@ -17,7 +29,7 @@ def load_df():
 def get_llm():
     # loaded only if LLM mode is selected; free/public model
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
-    model_id = "google/flan-t5-base"
+    model_id = "google/flan-t5-small"
     tok = AutoTokenizer.from_pretrained(model_id)
     mdl = AutoModelForSeq2SeqLM.from_pretrained(model_id)
     return pipeline("text2text-generation", model=mdl, tokenizer=tok)
@@ -118,7 +130,7 @@ def run_local(sql: str) -> pd.DataFrame:
     return con.execute(sql).df()
 
 st.title("🛒 Marketplace Intelligence — NL→SQL (Heuristic / LLM) or Raw SQL")
-mode = st.radio("Engine", ["Local Heuristic", "LLM (flan-t5-base)", "SQL (manual)"])
+mode = st.radio("Engine", ["Local Heuristic", "LLM (flan-t5-small)", "SQL (manual)"])
 q = st.text_input("Ask or write SQL",
                   value="Top 3 selling electronics products in Q3 (rolling 7d also supported)")
 
@@ -127,20 +139,20 @@ if st.button("Run"):
         if mode == "SQL (manual)":
             sql = sanitize_sql(q)
             st.code(sql, language="sql")
-            st.dataframe(run_local(sql), use_container_width=True)
+            st.dataframe(df, width='stretch')   # type: ignore
 
-        elif mode == "LLM (flan-t5-base)":
+        elif mode == "LLM (flan-t5-small)":
             prompt = (f"Generate DuckDB SQL for this question ONLY using {SCHEMA_TEXT}. "
                       "Return ONLY the SQL without explanation.\nQ: " + q)
             out = get_llm()(prompt, max_new_tokens=160)[0]["generated_text"]
             sql = sanitize_sql(out[out.lower().find("select"):])  # crude extract
             st.code(sql, language="sql")
-            st.dataframe(run_local(sql), use_container_width=True)
+            st.dataframe(df, width='stretch')   # type: ignore
 
         else:  # Local Heuristic
             sql = parse_nl_to_sql(q)
             st.code(sql, language="sql")
-            st.dataframe(run_local(sql), use_container_width=True)
+            st.dataframe(df, width='stretch')   # type: ignore
 
     except Exception as e:
         st.error(f"{type(e).__name__}: {e}")
