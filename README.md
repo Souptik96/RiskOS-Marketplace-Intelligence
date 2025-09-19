@@ -1,20 +1,28 @@
 ---
 title: Marketplace Intelligence
-emoji: 🚀
+emoji: 🛒
 colorFrom: red
 colorTo: red
 sdk: docker
 app_port: 8501
 tags:
 - streamlit
+- duckdb
+- nl2sql
 pinned: false
-short_description: Automated Data Solutions
+short_description: Ask sales questions in natural language → see SQL + results + citations.
 license: mit
 ---
 
-# Welcome to Streamlit!
+# Marketplace Intelligence — Streamlit Demo
 
-Edit `/src/streamlit_app.py` to customize this app to your heart's desire. :heart:
+Natural-language to SQL over an aggregated daily sales table (`daily_product_sales`), with two modes:
+- **Local (built-in data)**: uses the CSV in `data/`.
+- **Remote API**: calls your deployed API at `/ask?q=...` (ECS/API GW etc.).
 
-If you have any questions, checkout our [documentation](https://docs.streamlit.io) and [community
-forums](https://discuss.streamlit.io).
+## Run locally
+```bash
+python -m venv .venv && source .venv/Scripts/activate       # on Windows Git Bash
+pip install -r requirements.txt
+# ensure CSV exists under data/daily_product_sales.csv (see below)
+streamlit run streamlit_app.py
