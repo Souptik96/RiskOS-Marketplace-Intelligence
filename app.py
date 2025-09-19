@@ -1,4 +1,3 @@
-# ---------- set writable caches BEFORE importing gradio/transformers ----------
 import os
 os.environ.setdefault("HOME", "/tmp")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
@@ -19,9 +18,10 @@ import re
 import pandas as pd
 import duckdb
 import gradio as gr
+from functools import lru_cache
 
 # ----------------------------- data loading -----------------------------
-@gr.cache
+@lru_cache(maxsize=None)
 def load_df():
     """Load CSV; ensure 'day' is DATE; create tiny fallback if missing."""
     path = "data/daily_product_sales.csv"
@@ -175,7 +175,7 @@ def sanitize_sql(sql):
     return s
 
 # --------------------------- lazy LLM loader -----------------------------
-@gr.cache
+@lru_cache(maxsize=None)
 def get_llm():
     try:
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
