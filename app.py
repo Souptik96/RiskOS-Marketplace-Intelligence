@@ -21,7 +21,7 @@ import duckdb
 import gradio as gr
 from functools import lru_cache
 from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 
 SCHEMA_TEXT = (
     "Table daily_product_sales(product_title TEXT, category TEXT, "
@@ -199,58 +199,35 @@ def get_llm():
     return pipeline("text2text-generation", model=mdl, tokenizer=tok)
 
 # --------------------------------- UI -----------------------------------
-def run_query(mode, q):
-    try:
-        if mode == "SQL (manual)":
-            if not re.match(r"(?is)^\s*(select|with)\b", q.strip()):
-                gr.Info("Detected natural language — routing to heuristic.")
-                sql = parse_nl_to_sql(q)
-            else:
-                sql = enforce_table(q)
-                sql = sanitize_sql(sql)
-            df = run_local(sql)
-            return sql, df.to_html(), "Citations: daily_product_sales"
-
-        elif mode == "LLM (flan-t5-small)":
-            prompt = (
-                f"Return ONLY DuckDB SQL (no prose/backticks). "
-                f"Start with SELECT or WITH. Use {SCHEMA_TEXT} and year 2024.\nQ: {q}"
-            )
-            gen = get_llm()(prompt, max_new_tokens=180, do_sample=False, num_beams=1)[0]["generated_text"]
-            sql = extract_sql(gen)
-            sql = enforce_table(sql)
-            try:
-                sql = sanitize_sql(sql)
-            except Exception:
-                prompt2 = "ONLY SQL. FIRST CHAR MUST BE S or W.\n" + prompt
-                gen2 = get_llm()(prompt2, max_new_tokens=160, do_sample=False, num_beams=1)[0]["generated_text"]
-                sql = enforce_table(extract_sql(gen2))
-                sql = sanitize_sql(sql)
-            df = run_local(sql)
-            return sql, df.to_html(), "Citations: daily_product_sales"
-
-        else:  # Local Heuristic
-            sql = parse_nl_to_sql(q)
-            df = run_local(sql)
-            return sql, df.to_html(), "Citations: daily_product_sales"
-
-    except Exception as e:
-        return "Error", str(e), ""
-
-iface = gr.Interface(
-    fn=run_query,
-    inputs=[gr.Radio(["Local Heuristic", "LLM (flan-t5-small)", "SQL (manual)"]), gr.Textbox()],
-    outputs=[gr.Code(label="SQL"), gr.HTML(label="Results"), gr.Text(label="Citations")],
-    title="🛒 Marketplace Intelligence — NL→SQL",
-    description="Query marketplace data with heuristic, LLM, or manual SQL.",
-    examples=[["Top 3 selling electronics products in Q3"]],
-    allow_flagging="never",
-    cache_examples=False,
-)
+with gr.Blocks(title="🛒 Marketplace Intelligence — NL→SQL") as iface:
+    gr.Markdown("# 🛒 Marketplace Intelligence — NL→SQL")
+    gr.Markdown("Query marketplace data with heuristic, LLM, or manual SQL.")
+    
+    with gr.Row():
+        mode = gr.Radio(["Local Heuristic", "LLM (flan-t5-small)", "SQL (manual)"], label="Engine")
+        q = gr.Textbox(label="Ask or write SQL", value="Top 3 selling electronics products in Q3")
+    
+    with gr.Row():
+        sql_output = gr.Code(label="SQL")
+        results_output = gr.HTML(label="Results")
+        citations_output = gr.Text(label="Citations")
+    
+    btn = gr.Button("Run")
+    btn.click(
+        fn=lambda m, q: run_query(m, q),
+        inputs=[mode, q],
+        outputs=[sql_output, results_output, citations_output]
+    )
 
 @app.get("/health")
 async def health_check():
     return PlainTextResponse("OK")
 
+@app.get("/", include_in_schema=False)
+async def redirect_to_app():
+    return RedirectResponse(url="/", status_code=303)
+
+# Launch with HF Spaces compatibility
 print("Starting Gradio app on FastAPI...")
-app = gr.mount_gradio_app(app, iface, path="/")
+import uvicorn
+uvicorn.run(app, host="0.0.0.0", port=7860, log_level="info")
