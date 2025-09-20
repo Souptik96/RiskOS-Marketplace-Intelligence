@@ -22,6 +22,11 @@ import gradio as gr
 from functools import lru_cache
 import time
 
+SCHEMA_TEXT = (
+    "Table daily_product_sales(product_title TEXT, category TEXT, "
+    "day DATE, units INT, revenue DOUBLE)."
+)
+
 # ----------------------------- data loading -----------------------------
 @lru_cache(maxsize=None)
 def load_df():
@@ -240,8 +245,7 @@ iface = gr.Interface(
     cache_examples=False,
 )
 
-# Launch with health check instead of timeout
-start_time = time.time()
-iface.launch(server_name="0.0.0.0", server_port=7860)
-if time.time() - start_time > 300:  # 5-minute check
-    print("Startup exceeded 5 minutes; check logs for issues")
+# Launch for HF Spaces: bind to 0.0.0.0:7860 without sharing
+print("Starting Gradio app for HF Spaces...")
+iface.launch(server_name="0.0.0.0", server_port=7860, share=False, quiet=True)
+print("Gradio app launched successfully.")
