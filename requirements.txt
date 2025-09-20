@@ -1,7 +1,6 @@
-pandas
+gradio==4.36.0
+pandas==2.2.2
 duckdb==1.0.0
-requests==2.32.3
-gradio
 transformers==4.44.2
 sentencepiece==0.2.0
 torch==2.3.1

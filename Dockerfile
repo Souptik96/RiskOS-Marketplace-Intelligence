@@ -16,4 +16,7 @@ ENV TORCH_HOME=/tmp/.cache/torch
 
 RUN mkdir -p $XDG_CACHE_HOME $HF_HOME $HF_HUB_CACHE $TRANSFORMERS_CACHE $TORCH_HOME
 
+# Pre-download model to speed up startup
+RUN python -c "from transformers import AutoModelForSeq2SeqLM, AutoTokenizer; AutoModelForSeq2SeqLM.from_pretrained('google/flan-t5-small'); AutoTokenizer.from_pretrained('google/flan-t5-small')"
+
 CMD ["python", "app.py"]

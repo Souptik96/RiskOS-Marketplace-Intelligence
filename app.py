@@ -1,3 +1,4 @@
+# ---------- set writable caches BEFORE importing gradio/transformers ----------
 import os
 os.environ.setdefault("HOME", "/tmp")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
@@ -234,5 +235,14 @@ iface = gr.Interface(
     title="🛒 Marketplace Intelligence — NL→SQL",
     description="Query marketplace data with heuristic, LLM, or manual SQL.",
     examples=[["Top 3 selling electronics products in Q3"]],
+    # Optimize startup: lazy load and limit resources
+    allow_flagging="never",
+    cache_examples=False,
 )
-iface.launch()
+
+# Launch with timeout to prevent hang
+import time
+start_time = time.time()
+iface.launch(server_name="0.0.0.0", server_port=7860, timeout=300)  # 5-minute timeout
+if time.time() - start_time > 300:
+    raise TimeoutError("App startup exceeded 5 minutes")
