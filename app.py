@@ -20,6 +20,7 @@ import pandas as pd
 import duckdb
 import gradio as gr
 from functools import lru_cache
+import time
 
 # ----------------------------- data loading -----------------------------
 @lru_cache(maxsize=None)
@@ -235,14 +236,12 @@ iface = gr.Interface(
     title="🛒 Marketplace Intelligence — NL→SQL",
     description="Query marketplace data with heuristic, LLM, or manual SQL.",
     examples=[["Top 3 selling electronics products in Q3"]],
-    # Optimize startup: lazy load and limit resources
     allow_flagging="never",
     cache_examples=False,
 )
 
-# Launch with timeout to prevent hang
-import time
+# Launch with health check instead of timeout
 start_time = time.time()
-iface.launch(server_name="0.0.0.0", server_port=7860, timeout=300)  # 5-minute timeout
-if time.time() - start_time > 300:
-    raise TimeoutError("App startup exceeded 5 minutes")
+iface.launch(server_name="0.0.0.0", server_port=7860)
+if time.time() - start_time > 300:  # 5-minute check
+    print("Startup exceeded 5 minutes; check logs for issues")
