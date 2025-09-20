@@ -1,17 +1,20 @@
 # ---------- set writable caches BEFORE importing gradio/transformers ----------
 import os
 os.environ.setdefault("HOME", "/tmp")
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-config")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
 os.environ.setdefault("HF_HOME", "/tmp/.cache/hf")
 os.environ.setdefault("HF_HUB_CACHE", "/tmp/.cache/hf/hub")
 os.environ.setdefault("TRANSFORMERS_CACHE", "/tmp/.cache/transformers")
 os.environ.setdefault("TORCH_HOME", "/tmp/.cache/torch")
+
 for d in [
     os.environ["XDG_CACHE_HOME"],
     os.environ["HF_HOME"],
     os.environ["HF_HUB_CACHE"],
     os.environ["TRANSFORMERS_CACHE"],
     os.environ["TORCH_HOME"],
+    os.environ["MPLCONFIGDIR"]
 ]:
     os.makedirs(d, exist_ok=True)
 
