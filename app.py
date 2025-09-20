@@ -243,4 +243,4 @@ iface = gr.Interface(
     allow_flagging="never",
     cache_examples=False,
 )
-iface.launch(server_name="0.0.0.0", server_port=7860, share=False, debug=True)
+iface.launch(server_name="0.0.0.0", server_port=8501, share=False, debug=True)
