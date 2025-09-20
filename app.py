@@ -20,12 +20,15 @@ import pandas as pd
 import duckdb
 import gradio as gr
 from functools import lru_cache
-import time
+from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 
 SCHEMA_TEXT = (
     "Table daily_product_sales(product_title TEXT, category TEXT, "
     "day DATE, units INT, revenue DOUBLE)."
 )
+
+app = FastAPI()
 
 # ----------------------------- data loading -----------------------------
 @lru_cache(maxsize=None)
@@ -245,7 +248,9 @@ iface = gr.Interface(
     cache_examples=False,
 )
 
-# Launch for HF Spaces: bind to 0.0.0.0:7860 without sharing
-print("Starting Gradio app for HF Spaces...")
-iface.launch(server_name="0.0.0.0", server_port=7860, share=False, quiet=True)
-print("Gradio app launched successfully.")
+@app.get("/health")
+async def health_check():
+    return PlainTextResponse("OK")
+
+print("Starting Gradio app on FastAPI...")
+app = gr.mount_gradio_app(app, iface, path="/")
