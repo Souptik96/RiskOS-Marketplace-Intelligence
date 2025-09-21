@@ -33,7 +33,7 @@ SCHEMA_TEXT = (
 @lru_cache(maxsize=None)
 def load_df():
     """Load CSV; ensure 'day' is DATE; create tiny fallback if missing."""
-    path = "data/daily_product_sales.csv"
+    path = "daily_product_sales.csv"
     if not os.path.exists(path):
         import numpy as np
         os.makedirs("data", exist_ok=True)
