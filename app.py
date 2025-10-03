@@ -1,4 +1,4 @@
-﻿import os
+import os
 from datetime import date
 from typing import Dict, Optional
 
@@ -6,10 +6,42 @@ import pandas as pd
 import requests
 import streamlit as st
 
+try:
+    from api import main as local_api
+except ImportError:  # pragma: no cover - on HF Space without api package
+    local_api = None
+
 st.set_page_config(page_title="DataWeaver Dashboard", layout="wide")
 
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+API_URL = os.getenv("API_URL", "").strip().removesuffix("/")
 CATEGORY_OPTIONS = ["electronics", "home", "beauty", "sports", "toys"]
+
+
+def _execute_local(question_or_sql: str) -> Optional[Dict]:
+    if local_api is None:
+        return None
+    try:
+        result = local_api.execute(q=question_or_sql)
+    except Exception as exc:  # pragma: no cover - surfaced via UI
+        st.error(f"Local execution failed: {exc}")
+        return None
+    if hasattr(result, "model_dump"):
+        return result.model_dump()
+    return result
+
+
+def _review_local(question: str, sql_text: str) -> Optional[Dict]:
+    if local_api is None:
+        return None
+    try:
+        review_request = local_api.ReviewRequest(q=question, sql=sql_text)
+        result = local_api.review(review_request)
+    except Exception as exc:  # pragma: no cover
+        st.error(f"Local review failed: {exc}")
+        return None
+    if hasattr(result, "model_dump"):
+        return result.model_dump()
+    return result
 
 
 def api_call(
@@ -19,27 +51,40 @@ def api_call(
     payload: Optional[Dict] = None,
     method: str = "GET",
 ):
-    """Wrapper around the FastAPI service with friendly error feedback."""
-    url = f"{API_URL}{path}"
-    try:
-        if method.upper() == "POST":
-            response = requests.post(url, json=payload, timeout=60)
-        else:
-            response = requests.get(url, params=params, timeout=60)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as http_err:
-        detail = http_err.response.text if http_err.response is not None else str(http_err)
-        st.error(f"API error: {detail}")
-    except requests.exceptions.ConnectionError:
-        st.error("Unable to reach the API. Start it locally or update API_URL.")
-    except requests.exceptions.Timeout:
-        st.error("Request timed out. Please retry.")
-    except requests.RequestException as exc:
-        st.error(f"Unexpected API error: {exc}")
+    """Call remote API when available, otherwise fall back to local implementation."""
+    if API_URL:
+        url = f"{API_URL}{path}"
+        try:
+            if method.upper() == "POST":
+                response = requests.post(url, json=payload, timeout=60)
+            else:
+                response = requests.get(url, params=params, timeout=60)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as exc:
+            st.warning(f"Remote API unreachable ({exc}); falling back to local mode.")
+
+    # Local fallbacks (in-process FastAPI logic)
+    if path == "/execute":
+        question = ""
+        if params and "q" in params:
+            question = params["q"]
+        elif payload and "q" in payload:
+            question = payload["q"]
+        return _execute_local(question)
+    if path == "/review":
+        question = ""
+        sql_text = ""
+        if payload:
+            question = payload.get("q", "")
+            sql_text = payload.get("sql", "")
+        return _review_local(question, sql_text)
+
+    st.error("No local handler for this path; please configure API_URL.")
     return None
 
 
+# ... rest of file unchanged ...
 def render_ask_tab(tab):
     with tab:
         st.caption("Turn business questions into SQL, run them, and inspect AI reviews.")
