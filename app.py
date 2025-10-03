@@ -1,19 +1,23 @@
-import os
+﻿import os
 from datetime import date
 from typing import Dict, Optional
 
+import duckdb
 import pandas as pd
 import requests
 import streamlit as st
 
 try:
     from api import main as local_api
-except ImportError:  # pragma: no cover - on HF Space without api package
+except ImportError:  # pragma: no cover
     local_api = None
 
 st.set_page_config(page_title="DataWeaver Dashboard", layout="wide")
 
-API_URL = os.getenv("API_URL", "").strip().removesuffix("/")
+_raw_api_url = os.getenv("API_URL", "").strip()
+if _raw_api_url in {"http://localhost:8000", "http://127.0.0.1:8000", "localhost"}:
+    _raw_api_url = ""
+API_URL = _raw_api_url.removesuffix("/")
 CATEGORY_OPTIONS = ["electronics", "home", "beauty", "sports", "toys"]
 REMOTE_ERROR_HINT = (
     "Unable to reach the remote API. Falling back to in-process mode. "
@@ -23,37 +27,108 @@ MISSING_MODEL_HINT = (
     "Missing model configuration. Ensure FIREWORKS_API_KEY is set and the "
     "LLM_MODEL_GEN/LLM_MODEL_REV environment variables point to valid models."
 )
+HAS_LLM = bool(os.getenv("FIREWORKS_API_KEY")) and bool(os.getenv("LLM_MODEL_GEN")) and bool(
+    os.getenv("LLM_MODEL_REV")
+)
+
+
+@st.cache_data(show_spinner=False)
+def load_dataset() -> pd.DataFrame:
+    csv_path = os.getenv("DATA_CSV", "data/daily_product_sales.csv")
+    df = pd.read_csv(csv_path, parse_dates=["day"])
+    df["day"] = df["day"].dt.date
+    return df
+
+
+@st.cache_resource(show_spinner=False)
+def get_duckdb_connection():
+    con = duckdb.connect()
+    con.register("daily_product_sales", load_dataset())
+    return con
 
 
 def _handle_local_failure(exc: Exception) -> None:
     st.error(f"Local execution failed: {exc}\n{MISSING_MODEL_HINT}")
 
 
+def _generate_local_sql(question_or_sql: str) -> str:
+    if local_api is None:
+        return question_or_sql
+    if hasattr(local_api, "_is_sql") and local_api._is_sql(question_or_sql):  # type: ignore[attr-defined]
+        return local_api.sanitize(question_or_sql)
+    if hasattr(local_api, "_fallback_sql_from_question"):
+        sql = local_api._fallback_sql_from_question(question_or_sql)  # type: ignore[attr-defined]
+        return local_api.sanitize(sql)
+    return question_or_sql
+
+
 def _execute_local(question_or_sql: str) -> Optional[Dict]:
-    if local_api is None:
-        return None
-    try:
-        result = local_api.execute(q=question_or_sql)  # type: ignore[arg-type]
-    except Exception as exc:  # pragma: no cover - surfaced via UI
-        _handle_local_failure(exc)
-        return None
-    if hasattr(result, "model_dump"):
-        return result.model_dump()
-    return result
+    if HAS_LLM and local_api is not None:
+        try:
+            result = local_api.execute(q=question_or_sql)  # type: ignore[arg-type]
+            if hasattr(result, "model_dump"):
+                return result.model_dump()
+            return result
+        except Exception as exc:  # pragma: no cover - fall back to deterministic mode
+            _handle_local_failure(exc)
 
-
-def _review_local(question: str, sql_text: str) -> Optional[Dict]:
-    if local_api is None:
-        return None
+    sql = _generate_local_sql(question_or_sql)
+    con = get_duckdb_connection()
     try:
-        review_request = local_api.ReviewRequest(q=question, sql=sql_text)
-        result = local_api.review(review_request)
+        rows = con.execute(sql).df().to_dict(orient="records")
     except Exception as exc:  # pragma: no cover
         _handle_local_failure(exc)
         return None
-    if hasattr(result, "model_dump"):
-        return result.model_dump()
-    return result
+    review = _basic_review(question_or_sql, sql, rows)
+    return {"sql": sql, "rows": rows, "review": review}
+
+
+def _basic_review(question: str, sql: str, rows: Optional[list]) -> Dict:
+    lowered = " ".join(sql.lower().split())
+    analysis = {
+        "has_limit": " limit " in f" {lowered} ",
+        "targets_tables": [
+            t for t in ("daily_product_sales", "orders", "products") if t in lowered
+        ],
+        "has_group_by": "group by" in lowered,
+        "has_aggregation": any(
+            token in lowered for token in ("sum(", "avg(", "count(", "min(", "max(", "group by")
+        ),
+    }
+    issues = []
+    warnings = []
+    stripped = lowered.strip()
+    if not stripped.startswith("select") and not stripped.startswith("with"):
+        issues.append("Only SELECT/CTE statements are supported in dashboard mode.")
+    forbidden = [kw for kw in ("insert", "update", "delete", "drop", "alter") if kw in lowered]
+    if forbidden:
+        issues.append(f"Detected disallowed keywords: {', '.join(forbidden)}")
+    if not analysis["has_limit"]:
+        warnings.append("Add LIMIT to keep dashboard renders responsive.")
+    if not analysis["targets_tables"]:
+        warnings.append("Query does not reference a known marketplace table.")
+    if rows is not None and len(rows) == 0:
+        warnings.append("Query returned zero rows for the selected filters.")
+
+    summary = "SQL validated successfully."
+    if issues:
+        summary = "SQL failed validation due to critical issues."
+    elif warnings:
+        summary = "SQL is valid but review the warnings before finalizing."
+
+    return {
+        "valid": not issues,
+        "summary": summary,
+        "issues": issues,
+        "warnings": warnings,
+        "analysis": analysis,
+        "question": question,
+    }
+
+
+@st.cache_data(show_spinner=False)
+def get_remote_hint():
+    return REMOTE_ERROR_HINT
 
 
 def api_call(
@@ -74,9 +149,8 @@ def api_call(
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as exc:
-            st.warning(f"{REMOTE_ERROR_HINT}\nDetails: {exc}")
+            st.warning(f"{get_remote_hint()}\nDetails: {exc}")
 
-    # Local fallbacks (in-process FastAPI logic)
     if path == "/execute":
         question = ""
         if params and "q" in params:
@@ -84,19 +158,19 @@ def api_call(
         elif payload and "q" in payload:
             question = payload["q"]
         return _execute_local(question)
+
     if path == "/review":
         question = ""
         sql_text = ""
         if payload:
             question = payload.get("q", "")
             sql_text = payload.get("sql", "")
-        return _review_local(question, sql_text)
+        review_payload = _basic_review(question, sql_text, None)
+        return {"sql": sql_text, "review": review_payload}
 
     st.error("No local handler for this path; please configure API_URL.")
     return None
 
-
-# rest of file remains unchanged
 def render_ask_tab(tab):
     with tab:
         st.caption("Turn business questions into SQL, run them, and inspect AI reviews.")
