@@ -1,249 +1,202 @@
-# ---------- set writable caches BEFORE importing gradio/transformers ----------
 import os
-os.environ.setdefault("HOME", "/tmp")
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-config")
-os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
-os.environ.setdefault("HF_HOME", "/tmp/.cache/hf")
-os.environ.setdefault("HF_HUB_CACHE", "/tmp/.cache/hf/hub")
-os.environ.setdefault("TRANSFORMERS_CACHE", "/tmp/.cache/transformers")
-os.environ.setdefault("TORCH_HOME", "/tmp/.cache/torch")
+from datetime import date
+from typing import Dict, Optional
 
-for d in [
-    os.environ["XDG_CACHE_HOME"],
-    os.environ["HF_HOME"],
-    os.environ["HF_HUB_CACHE"],
-    os.environ["TRANSFORMERS_CACHE"],
-    os.environ["TORCH_HOME"],
-    os.environ["MPLCONFIGDIR"]
-]:
-    os.makedirs(d, exist_ok=True)
-
-import re
 import pandas as pd
-import duckdb
-import gradio as gr
-from functools import lru_cache
+import requests
+import streamlit as st
 
-SCHEMA_TEXT = (
-    "Table daily_product_sales(product_title TEXT, category TEXT, "
-    "day DATE, units INT, revenue DOUBLE)."
+st.set_page_config(page_title="DataWeaver Dashboard", layout="wide")
+
+API_URL = os.getenv("API_URL", "http://localhost:8000")
+CATEGORY_OPTIONS = ["electronics", "home", "beauty", "sports", "toys"]
+
+
+def api_call(
+    path: str,
+    *,
+    params: Optional[Dict] = None,
+    payload: Optional[Dict] = None,
+    method: str = "GET",
+):
+    """Wrapper around the FastAPI service with friendly error feedback."""
+    url = f"{API_URL}{path}"
+    try:
+        if method.upper() == "POST":
+            response = requests.post(url, json=payload, timeout=60)
+        else:
+            response = requests.get(url, params=params, timeout=60)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.HTTPError as http_err:
+        detail = http_err.response.text if http_err.response is not None else str(http_err)
+        st.error(f"API error: {detail}")
+    except requests.exceptions.ConnectionError:
+        st.error("Unable to reach the API. Start it locally or update API_URL.")
+    except requests.exceptions.Timeout:
+        st.error("Request timed out. Please retry.")
+    except requests.RequestException as exc:
+        st.error(f"Unexpected API error: {exc}")
+    return None
+
+
+tab_ask, tab_review, tab_dashboard = st.tabs(
+    ["Ask (Business to SQL)", "Review SQL", "Generate Dashboard"]
 )
 
-# ----------------------------- data loading -----------------------------
-@lru_cache(maxsize=None)
-def load_df():
-    """Load CSV; ensure 'day' is DATE; create tiny fallback if missing."""
-    path = "daily_product_sales.csv"
-    if not os.path.exists(path):
-        import numpy as np
-        os.makedirs("data", exist_ok=True)
-        rng = np.random.default_rng(7)
-        cats = ["electronics", "home", "beauty", "sports", "toys"]
-        prods = pd.DataFrame({"product_id": range(1, 21)})
-        prods["product_title"] = [f"Product {i}" for i in range(1, 21)]
-        prods["category"] = rng.choice(cats, len(prods))
-        prods["price"] = np.round(rng.gamma(4, 20, len(prods)) + 5, 2)
-        orders = []
-        for oid in range(1, 501):
-            pid = int(rng.integers(1, 21))
-            qty = int(rng.integers(1, 4))
-            ts = pd.Timestamp("2024-01-01") + pd.to_timedelta(int(rng.integers(0, 365)), "D")
-            orders.append({"order_id": oid, "product_id": pid, "qty": qty, "ts": ts})
-        orders = pd.DataFrame(orders)
-        tmp = orders.merge(prods, on="product_id")
-        tmp["day"] = pd.to_datetime(tmp["ts"]).dt.floor("D")
-        tmp["revenue"] = tmp["qty"] * tmp["price"]
-        daily = (
-            tmp.groupby(["product_id", "product_title", "category", "day"], as_index=False)
-            .agg(units=("qty", "sum"), revenue=("revenue", "sum"))
-        )
-        daily.to_csv(path, index=False)
 
-    df = pd.read_csv(path, parse_dates=["day"])
-    df["day"] = pd.to_datetime(df["day"]).dt.date
-    return df[["product_title", "category", "day", "units", "revenue"]]
-
-def run_local(sql):
-    con = duckdb.connect()
-    con.register("daily_product_sales", load_df())
-    return con.execute(sql).df()
-
-# --------------------------- heuristic NL → SQL --------------------------
-def parse_nl_to_sql(q):
-    ql = q.lower()
-    topn = 5
-    for tok in q.split():
-        if tok.isdigit():
-            topn = int(tok); break
-
-    cat = next((c for c in ["electronics", "home", "beauty", "sports", "toys"] if c in ql), None)
-    quarter = next((f"Q{n}" for n in [1, 2, 3, 4] if f"q{n}" in ql), None)
-
-    def qrange(qr):
-        return {
-            "Q1": ("2024-01-01", "2024-03-31"),
-            "Q2": ("2024-04-01", "2024-06-30"),
-            "Q3": ("2024-07-01", "2024-09-30"),
-            "Q4": ("2024-10-01", "2024-12-31"),
-        }[qr]
-
-    where = []
-    if cat:
-        where.append(f"category = '{cat}'")
-    if quarter:
-        lo, hi = qrange(quarter)
-        where.append(f"CAST(day AS DATE) BETWEEN DATE '{lo}' AND DATE '{hi}'")
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
-
-    if "rolling" in ql and ("7" in ql or "7d" in ql):
-        return f"""
-SELECT day, category,
-       SUM(revenue) AS revenue_day,
-       SUM(SUM(revenue)) OVER (
-         PARTITION BY category
-         ORDER BY day
-         ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
-       ) AS revenue_7d
-FROM daily_product_sales
-{where_sql}
-GROUP BY day, category
-ORDER BY day ASC;
-"""
-    if "cumulative" in ql or "running total" in ql:
-        return f"""
-SELECT day, category,
-       SUM(revenue) AS revenue_day,
-       SUM(SUM(revenue)) OVER (
-         PARTITION BY category
-         ORDER BY day
-       ) AS revenue_cum
-FROM daily_product_sales
-{where_sql}
-GROUP BY day, category
-ORDER BY day ASC;
-"""
-    if "rank" in ql or "top" in ql:
-        return f"""
-WITH g AS (
-  SELECT product_title, category,
-         SUM(revenue) AS revenue,
-         ROW_NUMBER() OVER (PARTITION BY category ORDER BY SUM(revenue) DESC) AS rnk
-  FROM daily_product_sales
-  {where_sql}
-  GROUP BY 1,2
-)
-SELECT * FROM g
-{"WHERE rnk <= " + str(topn) if topn else ""}
-ORDER BY revenue DESC;
-"""
-    return f"""
-SELECT product_title, category, SUM(units) AS units, SUM(revenue) AS revenue
-FROM daily_product_sales
-{where_sql}
-GROUP BY 1,2
-ORDER BY revenue DESC
-LIMIT {topn};
-"""
-
-# ---------------------------- SQL safety helpers -------------------------
-def extract_sql(text):
-    m = re.search(r"```sql\s*(.*?)```", text, flags=re.I | re.S)
-    if m: return m.group(1).strip().rstrip(";")
-    m = re.search(r"```(.*?)```", text, flags=re.S)
-    if m: text = m.group(1)
-    m = re.search(r"(?is)\b(select|with)\b.*", text)
-    return m.group(0).strip() if m else text.strip()
-
-def enforce_table(sql, table="daily_product_sales"):
-    s = sql.strip().strip(";")
-    low = s.lower()
-    if table in low:
-        return s
-    m = re.search(r"(?is)\bfrom\s+([a-zA-Z_][\w\.\"`]*)\s*(?:as\s+([a-zA-Z_]\w*))?", s)
-    if m and not m.group(1).strip().startswith("("):
-        alias = m.group(2) or ""
-        prefix, suffix = s[:m.start()], s[m.end():]
-        return f"{prefix}FROM {table} {alias} {suffix}".strip()
-    cut = len(s)
-    for kw in [" where ", "\nwhere ", " group ", "\ngroup ", " order ", "\norder ", " limit ", "\nlimit "]:
-        p = low.find(kw)
-        if p != -1:
-            cut = min(cut, p)
-    return (s[:cut] + f" FROM {table} " + s[cut:]).strip()
-
-def sanitize_sql(sql):
-    s = sql.strip().strip(";")
-    low = s.lower()
-    if not (low.startswith("select") or low.startswith("with")):
-        raise ValueError("Only SELECT/CTE queries are allowed.")
-    banned = r"(?is)\b(drop|delete|update|insert|merge|create|alter|truncate|attach|copy|vacuum)\b"
-    if re.search(banned, low):
-        raise ValueError("Dangerous statement blocked.")
-    if "daily_product_sales" not in low:
-        raise ValueError("Query must reference 'daily_product_sales'.")
-    return s
-
-# --------------------------- lazy LLM loader -----------------------------
-@lru_cache(maxsize=None)
-def get_llm():
-    try:
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
-    except Exception as e:
-        raise RuntimeError(
-            "LLM deps missing. Add to requirements: transformers, sentencepiece, torch (CPU)."
-        ) from e
-    model_id = "google/flan-t5-small"
-    tok = AutoTokenizer.from_pretrained(model_id)
-    mdl = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-    return pipeline("text2text-generation", model=mdl, tokenizer=tok)
-
-# --------------------------------- UI -----------------------------------
-def run_query(mode, q):
-    try:
-        if mode == "SQL (manual)":
-            if not re.match(r"(?is)^\s*(select|with)\b", q.strip()):
-                gr.Info("Detected natural language — routing to heuristic.")
-                sql = parse_nl_to_sql(q)
+def render_ask_tab() -> None:
+    with tab_ask:
+        st.caption("Turn business questions into SQL, run them, and inspect AI reviews.")
+        default_question = "Top 5 electronics products by revenue in Q3"
+        question = st.text_input("Enter business question", default_question)
+        if st.button("Generate & Run", key="ask_run"):
+            if not question.strip():
+                st.warning("Please enter a question first.")
+                return
+            with st.spinner("Generating SQL and running query..."):
+                resp = api_call("/execute", params={"q": question})
+            if not resp:
+                return
+            st.subheader("Generated SQL")
+            st.code(resp.get("sql", ""), language="sql")
+            rows = resp.get("rows", [])
+            df = pd.DataFrame(rows)
+            if df.empty:
+                st.warning("No rows returned for this question.")
             else:
-                sql = enforce_table(q)
-                sql = sanitize_sql(sql)
-            df = run_local(sql)
-            return sql, df.to_html(), "Citations: daily_product_sales"
+                st.dataframe(df, use_container_width=True)
+                if {"product_title", "revenue"}.issubset(df.columns):
+                    chart_df = df.set_index("product_title")["revenue"]
+                    st.bar_chart(chart_df, use_container_width=True)
+            review_payload = resp.get("review")
+            if review_payload:
+                st.subheader("AI Review")
+                st.json(review_payload)
 
-        elif mode == "LLM (flan-t5-small)":
-            prompt = (
-                f"Return ONLY DuckDB SQL (no prose/backticks). "
-                f"Start with SELECT or WITH. Use {SCHEMA_TEXT} and year 2024.\nQ: {q}"
+
+def render_review_tab() -> None:
+    with tab_review:
+        st.caption("Validate SQL snippets or NL prompts before you run them.")
+        default_question = "Top 10 beauty products in Q2"
+        default_sql = (
+            "SELECT category, SUM(revenue) AS revenue\n"
+            "FROM daily_product_sales\n"
+            "GROUP BY category\n"
+            "ORDER BY revenue DESC\n"
+            "LIMIT 5;"
+        )
+        col_question, col_sql = st.columns(2)
+        question = col_question.text_area(
+            "Business question (optional context)", default_question, height=160
+        )
+        sql_text = col_sql.text_area("SQL to review", default_sql, height=160)
+        if st.button("Review", key="review_sql"):
+            if not sql_text.strip():
+                st.warning("Provide SQL to review.")
+                return
+            payload = {"q": question, "sql": sql_text}
+            with st.spinner("Reviewing SQL..."):
+                resp = api_call("/review", payload=payload, method="POST")
+            if resp:
+                st.json(resp)
+                fixed_sql = resp.get("fixed_sql") if isinstance(resp, dict) else None
+                if fixed_sql:
+                    st.subheader("Suggested Fix")
+                    st.code(fixed_sql, language="sql")
+
+
+def render_dashboard_tab() -> None:
+    with tab_dashboard:
+        st.subheader("Auto-Generated Dashboard")
+        st.caption("Filter and visualize sales data with live queries against the API.")
+
+        with st.form("dashboard_filters"):
+            selected_categories = st.multiselect(
+                "Filter by category",
+                options=CATEGORY_OPTIONS,
+                default=CATEGORY_OPTIONS,
             )
-            gen = get_llm()(prompt, max_new_tokens=180, do_sample=False, num_beams=1)[0]["generated_text"]
-            sql = extract_sql(gen)
-            sql = enforce_table(sql)
-            try:
-                sql = sanitize_sql(sql)
-            except Exception:
-                prompt2 = "ONLY SQL. FIRST CHAR MUST BE S or W.\n" + prompt
-                gen2 = get_llm()(prompt2, max_new_tokens=160, do_sample=False, num_beams=1)[0]["generated_text"]
-                sql = enforce_table(extract_sql(gen2))
-                sql = sanitize_sql(sql)
-            df = run_local(sql)
-            return sql, df.to_html(), "Citations: daily_product_sales"
+            col_start, col_end = st.columns(2)
+            with col_start:
+                start_date = st.date_input("Start date", date(2024, 1, 1))
+            with col_end:
+                end_date = st.date_input("End date", date(2024, 12, 31))
+            refresh = st.form_submit_button("Refresh Dashboard")
 
-        else:  # Local Heuristic
-            sql = parse_nl_to_sql(q)
-            df = run_local(sql)
-            return sql, df.to_html(), "Citations: daily_product_sales"
+        if not refresh:
+            return
 
-    except Exception as e:
-        return "Error", str(e), ""
+        if start_date > end_date:
+            st.error("Start date must be before end date.")
+            return
 
-iface = gr.Interface(
-    fn=run_query,
-    inputs=[gr.Radio(["Local Heuristic", "LLM (flan-t5-small)", "SQL (manual)"]), gr.Textbox()],
-    outputs=[gr.Code(label="SQL"), gr.HTML(label="Results"), gr.Text(label="Citations")],
-    title="🛒 Marketplace Intelligence — NL→SQL",
-    description="Query marketplace data with heuristic, LLM, or manual SQL.",
-    examples=[["Top 3 selling electronics products in Q3"]],
-    allow_flagging="never",
-    cache_examples=False,
-)
-iface.launch(server_name="0.0.0.0", server_port=8501, share=False, debug=True)
+        active_categories = selected_categories or CATEGORY_OPTIONS
+        quoted = ", ".join(f"'{cat}'" for cat in active_categories)
+        sql = (
+            "SELECT product_title, category, day, units, revenue\n"
+            "FROM daily_product_sales\n"
+            f"WHERE category IN ({quoted}) AND day BETWEEN CAST('{start_date}' AS DATE) "
+            f"AND CAST('{end_date}' AS DATE)\n"
+            "ORDER BY day ASC, revenue DESC\n"
+            "LIMIT 1000;"
+        )
+
+        with st.spinner("Running dashboard query..."):
+            resp = api_call("/execute", params={"q": sql})
+
+        if not resp:
+            return
+
+        df = pd.DataFrame(resp.get("rows", []))
+        if df.empty:
+            st.warning("No data available for the selected filters.")
+            return
+
+        if "day" in df.columns:
+            df["day"] = pd.to_datetime(df["day"])
+
+        st.write("### Result Sample")
+        st.dataframe(df.head(25), use_container_width=True)
+
+        if {"category", "revenue"}.issubset(df.columns):
+            revenue_by_category = (
+                df.groupby("category")["revenue"].sum().sort_values(ascending=False).reset_index()
+            )
+            st.bar_chart(
+                revenue_by_category.set_index("category")["revenue"],
+                use_container_width=True,
+            )
+            st.caption("Revenue by category")
+
+        if {"day", "units"}.issubset(df.columns):
+            units_over_time = df.groupby("day")["units"].sum().sort_index()
+            st.line_chart(units_over_time, use_container_width=True)
+            st.caption("Units sold over time")
+
+        if {"product_title", "revenue"}.issubset(df.columns):
+            top_products = (
+                df.groupby("product_title")["revenue"].sum().sort_values(ascending=False).head(10)
+            )
+            st.write("### Top Products by Revenue")
+            st.bar_chart(top_products, use_container_width=True)
+
+        review_payload = resp.get("review")
+        if review_payload:
+            with st.expander("SQL review details", expanded=False):
+                st.json(review_payload)
+
+        st.subheader("Planned Enhancements")
+        st.info(
+            "Cohort analysis and geo heatmaps will appear here once customer and location tables are joined."
+        )
+
+
+def main() -> None:
+    render_ask_tab()
+    render_review_tab()
+    render_dashboard_tab()
+
+
+if __name__ == "__main__":
+    main()
