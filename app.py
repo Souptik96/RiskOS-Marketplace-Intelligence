@@ -9,6 +9,8 @@ if __name__ == "__main__":
     port = env.get("PORT", "7860")
     env.setdefault("STREAMLIT_SERVER_ADDRESS", "0.0.0.0")
     env.setdefault("STREAMLIT_SERVER_PORT", port)
+    env.setdefault("STREAMLIT_SERVER_ENABLECORS", "false")
+    env.setdefault("STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION", "false")
     args = [
         sys.executable,
         "-m",
@@ -18,5 +20,7 @@ if __name__ == "__main__":
         "--server.headless=true",
         "--server.address=0.0.0.0",
         f"--server.port={port}",
+        "--server.enableCORS=false",
+        "--server.enableXsrfProtection=false",
     ]
     os.execve(sys.executable, args, env)
