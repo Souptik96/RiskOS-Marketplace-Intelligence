@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env bash
 set -e
-PORT=${PORT:-7860}
+PORT=${PORT:-8501}
 export STREAMLIT_SERVER_HEADLESS=true
 export STREAMLIT_SERVER_ADDRESS=0.0.0.0
 export STREAMLIT_SERVER_PORT=${PORT}
