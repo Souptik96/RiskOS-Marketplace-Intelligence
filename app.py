@@ -1,4 +1,13 @@
 import os
+import sys
+
+if os.environ.get("DATAWEAVER_STREAMLIT_BOOTSTRAPPED") != "1":
+    if __name__ == "__main__":
+        os.environ["DATAWEAVER_STREAMLIT_BOOTSTRAPPED"] = "1"
+        from streamlit.web import bootstrap
+        bootstrap.run(__file__, "", [], {})
+        sys.exit(0)
+
 from datetime import date
 from typing import Dict, Optional
 
