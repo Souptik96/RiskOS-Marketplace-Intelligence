@@ -1,4 +1,4 @@
-﻿FROM python:3.11-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -13,6 +13,9 @@ ENV HF_HOME=/tmp/.cache/hf
 ENV HF_HUB_CACHE=/tmp/.cache/hf/hub
 ENV TRANSFORMERS_CACHE=/tmp/.cache/transformers
 ENV TORCH_HOME=/tmp/.cache/torch
+ENV LLM_PROVIDER=fireworks
+ENV LLM_MODEL_GEN=accounts/fireworks/models/qwen3-coder-30b-a3b-instruct
+ENV LLM_MODEL_REV=accounts/fireworks/models/qwen3-coder-30b-a3b-instruct
 
 RUN mkdir -p $XDG_CACHE_HOME $HF_HOME $HF_HUB_CACHE $TRANSFORMERS_CACHE $TORCH_HOME
 

@@ -15,15 +15,27 @@ st.set_page_config(page_title="DataWeaver Dashboard", layout="wide")
 
 API_URL = os.getenv("API_URL", "").strip().removesuffix("/")
 CATEGORY_OPTIONS = ["electronics", "home", "beauty", "sports", "toys"]
+REMOTE_ERROR_HINT = (
+    "Unable to reach the remote API. Falling back to in-process mode. "
+    "If you expect to use a remote backend, set the API_URL environment variable."
+)
+MISSING_MODEL_HINT = (
+    "Missing model configuration. Ensure FIREWORKS_API_KEY is set and the "
+    "LLM_MODEL_GEN/LLM_MODEL_REV environment variables point to valid models."
+)
+
+
+def _handle_local_failure(exc: Exception) -> None:
+    st.error(f"Local execution failed: {exc}\n{MISSING_MODEL_HINT}")
 
 
 def _execute_local(question_or_sql: str) -> Optional[Dict]:
     if local_api is None:
         return None
     try:
-        result = local_api.execute(q=question_or_sql)
+        result = local_api.execute(q=question_or_sql)  # type: ignore[arg-type]
     except Exception as exc:  # pragma: no cover - surfaced via UI
-        st.error(f"Local execution failed: {exc}")
+        _handle_local_failure(exc)
         return None
     if hasattr(result, "model_dump"):
         return result.model_dump()
@@ -37,7 +49,7 @@ def _review_local(question: str, sql_text: str) -> Optional[Dict]:
         review_request = local_api.ReviewRequest(q=question, sql=sql_text)
         result = local_api.review(review_request)
     except Exception as exc:  # pragma: no cover
-        st.error(f"Local review failed: {exc}")
+        _handle_local_failure(exc)
         return None
     if hasattr(result, "model_dump"):
         return result.model_dump()
@@ -62,7 +74,7 @@ def api_call(
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as exc:
-            st.warning(f"Remote API unreachable ({exc}); falling back to local mode.")
+            st.warning(f"{REMOTE_ERROR_HINT}\nDetails: {exc}")
 
     # Local fallbacks (in-process FastAPI logic)
     if path == "/execute":
@@ -84,7 +96,7 @@ def api_call(
     return None
 
 
-# ... rest of file unchanged ...
+# rest of file remains unchanged
 def render_ask_tab(tab):
     with tab:
         st.caption("Turn business questions into SQL, run them, and inspect AI reviews.")
