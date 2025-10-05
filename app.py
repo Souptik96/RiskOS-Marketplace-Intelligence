@@ -123,7 +123,7 @@ def _call_llm(provider: str, model: str, prompt: str) -> str:
         }
         headers = {"Authorization": f"Bearer {key}"}
         resp = requests.post(
-            "https://api.fireworks.ai/inference/v1/completions  ",
+            "https://api.fireworks.ai/inference/v1/completions".strip(),
             json=payload,
             headers=headers,
             timeout=60,
