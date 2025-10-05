@@ -86,11 +86,17 @@ def _schema_for_prompt(con: Optional[duckdb.DuckDBPyConnection]) -> str:
 
 
 def _enforce_limits(sql: str) -> str:
-    statement = sql.strip().rstrip(";")
+    # Take only the first SQL statement and strip whitespaces
+    statement = sql.split(';')[0].strip()
+
+    if not statement:
+        raise ValueError("Empty SQL statement")
+    
     lowered = statement.lower()
     if not (lowered.startswith("select") or lowered.startswith("with")):
         raise ValueError("Only SELECT/CTE statements are allowed.")
-    if " limit " not in lowered:
+    
+    if not re.search(r'\blimit\b', lowered):
         statement += " LIMIT 200"
     return statement
 
