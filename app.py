@@ -8,6 +8,7 @@ import chardet
 import duckdb
 import pandas as pd
 import requests
+from api.inference import _call_llm as _router_call
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -28,7 +29,7 @@ REMOTE_ERROR_HINT = (
     "If you expect to use a remote backend, set the API_URL environment variable."
 )
 MISSING_MODEL_HINT = (
-    "Missing model configuration. Set HUGGINGFACEHUB_API_TOKEN along with LLM_MODEL_GEN and LLM_MODEL_REV."
+    "Missing model configuration. Set HF_TOKEN along with LLM_MODEL_GEN and LLM_MODEL_REV."
 )
 PROMPT_DASHBOARD = (
     "You are a data visualization expert. Based on the following data columns, suggest the best single chart to build. "
@@ -114,22 +115,12 @@ def _expected_tables(sql: str) -> List[str]:
 
 def _provider_has_creds(provider: str) -> bool:
     # Unified on HF Router token
-    return bool(os.getenv("HUGGINGFACEHUB_API_TOKEN"))
+    return bool(os.getenv("HF_TOKEN"))
 
 
 def _call_llm(provider: str, model: str, prompt: str) -> str:
-    # Unified LLM call using HF Router Chat Completions endpoint
-    if not model:
-        raise RuntimeError("Model name is required.")
-    API_URL = os.getenv("LLM_API_URL", "https://router.huggingface.co/v1/chat/completions")
-    HEADERS = {"Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}", "Content-Type": "application/json"}
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    resp = requests.post(API_URL, headers=HEADERS, json=payload, timeout=60)
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    # Delegate to unified HF Router call; keep signature for compatibility
+    return _router_call(prompt, max_tokens=400, temperature=0.0, model=model)
 
 
 def _extract_sql_from_text(text: str) -> str:
@@ -180,7 +171,7 @@ def _gen_sql(question: str, schema: str, provider: str, model: str, api_url: str
             return _enforce_limits(candidate)
         except Exception:
             st.warning(REMOTE_ERROR_HINT)
-    llm_output = _call_llm(provider, model, prompt)
+    llm_output = _router_call(prompt, max_tokens=400, temperature=0.0, model=model)
     return _enforce_limits(_extract_sql_from_text(llm_output))
 
 
@@ -236,7 +227,7 @@ def _review_sql(question: str, sql: str, schema: str, provider: str, model: str)
         "Return JSON with keys reasoning, ok (true/false), fixed_sql."
     )
     try:
-        llm_response = _call_llm(provider, model, prompt)
+        llm_response = _router_call(prompt, max_tokens=400, temperature=0.0, model=model)
         parsed = _extract_json(llm_response)
         if parsed:
             return parsed
@@ -277,7 +268,7 @@ def _suggest_chart(df: pd.DataFrame, provider: str, model: str) -> Optional[Dict
     column_info = ", ".join(f"{col} ({df[col].dtype})" for col in df.columns)
     prompt = PROMPT_DASHBOARD.format(column_info=column_info)
     try:
-        raw = _call_llm(provider, model, prompt)
+        raw = _router_call(prompt, max_tokens=400, temperature=0.0, model=model)
         parsed = _extract_json(raw)
         if isinstance(parsed, dict):
             chart_type = parsed.get("chart_type")
