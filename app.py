@@ -339,7 +339,7 @@ api_url = st.sidebar.text_input(
 )
 
 # Agent API URL for metric generation
-agent_api_url = os.getenv("AGENT_API_URL", "http://localhost:7861")
+agent_api_url = os.getenv("AGENT_API_URL", "http://localhost:8501")
 
 st.title("Marketplace Intelligence — Upload → NL→SQL → Dashboard")
 if not dfs:

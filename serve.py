@@ -54,7 +54,12 @@ def nl2sql(payload: GeneratePayload):
     return core.nl2sql(core.GenRequest(q=payload.q))
 
 
+@api_app.post("/agent/generate_metric")
+def generate_metric(payload: dict):
+    return core.generate_metric(payload)  # Delegate to main API
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(api_app, host="0.0.0.0", port=int(os.getenv("PORT", "7861")))
+    uvicorn.run(api_app, host="0.0.0.0", port=int(os.getenv("PORT", "8501")))
