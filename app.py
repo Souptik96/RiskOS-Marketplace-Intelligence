@@ -28,7 +28,7 @@ REMOTE_ERROR_HINT = (
     "If you expect to use a remote backend, set the API_URL environment variable."
 )
 MISSING_MODEL_HINT = (
-    "Missing model configuration. Set HF_TOKEN along with LLM_MODEL_GEN and LLM_MODEL_REV."
+    "Missing model configuration. Set HUGGINGFACEHUB_API_TOKEN along with LLM_MODEL_GEN and LLM_MODEL_REV."
 )
 PROMPT_DASHBOARD = (
     "You are a data visualization expert. Based on the following data columns, suggest the best single chart to build. "
@@ -114,7 +114,7 @@ def _expected_tables(sql: str) -> List[str]:
 
 def _provider_has_creds(provider: str) -> bool:
     # Unified on HF Router token
-    return bool(os.getenv("HF_TOKEN"))
+    return bool(os.getenv("HUGGINGFACEHUB_API_TOKEN"))
 
 
 def _call_llm(provider: str, model: str, prompt: str) -> str:
@@ -122,7 +122,7 @@ def _call_llm(provider: str, model: str, prompt: str) -> str:
     if not model:
         raise RuntimeError("Model name is required.")
     API_URL = os.getenv("LLM_API_URL", "https://router.huggingface.co/v1/chat/completions")
-    HEADERS = {"Authorization": f"Bearer {os.environ['HF_TOKEN']}", "Content-Type": "application/json"}
+    HEADERS = {"Authorization": f"Bearer {os.environ['HUGGINGFACEHUB_API_TOKEN']}", "Content-Type": "application/json"}
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
