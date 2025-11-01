@@ -119,8 +119,8 @@ def _provider_has_creds(provider: str) -> bool:
 
 
 def _call_llm(provider: str, model: str, prompt: str) -> str:
-    # Delegate to unified HF Router call; keep signature for compatibility
-    return _router_call(prompt, max_tokens=400, temperature=0.0, model=model)
+    # Delegate to unified HF Router call; always use HF_ROUTER_MODEL with the router
+    return _router_call(prompt, max_tokens=400, temperature=0.0, model=os.getenv('HF_ROUTER_MODEL'))
 
 
 def _extract_sql_from_text(text: str) -> str:
@@ -171,7 +171,7 @@ def _gen_sql(question: str, schema: str, provider: str, model: str, api_url: str
             return _enforce_limits(candidate)
         except Exception:
             st.warning(REMOTE_ERROR_HINT)
-    llm_output = _router_call(prompt, max_tokens=400, temperature=0.0, model=model)
+    llm_output = _router_call(prompt, max_tokens=400, temperature=0.0, model=os.getenv('HF_ROUTER_MODEL'))
     return _enforce_limits(_extract_sql_from_text(llm_output))
 
 
@@ -227,7 +227,7 @@ def _review_sql(question: str, sql: str, schema: str, provider: str, model: str)
         "Return JSON with keys reasoning, ok (true/false), fixed_sql."
     )
     try:
-        llm_response = _router_call(prompt, max_tokens=400, temperature=0.0, model=model)
+        llm_response = _router_call(prompt, max_tokens=400, temperature=0.0, model=os.getenv('HF_ROUTER_MODEL'))
         parsed = _extract_json(llm_response)
         if parsed:
             return parsed
@@ -268,7 +268,7 @@ def _suggest_chart(df: pd.DataFrame, provider: str, model: str) -> Optional[Dict
     column_info = ", ".join(f"{col} ({df[col].dtype})" for col in df.columns)
     prompt = PROMPT_DASHBOARD.format(column_info=column_info)
     try:
-        raw = _router_call(prompt, max_tokens=400, temperature=0.0, model=model)
+        raw = _router_call(prompt, max_tokens=400, temperature=0.0, model=os.getenv('HF_ROUTER_MODEL'))
         parsed = _extract_json(raw)
         if isinstance(parsed, dict):
             chart_type = parsed.get("chart_type")

@@ -42,9 +42,8 @@ def extract_json(text: str):
 # ---------- Unified provider call via HF Router ----------
 
 def llm_call(kind: str, prompt: str) -> str:
-    """Unified HF Router call. kind: 'gen' or 'rev' chooses env model."""
-    model = os.getenv("LLM_MODEL_GEN") if kind == "gen" else os.getenv("LLM_MODEL_REV")
+    """Unified HF Router call. Model is taken from HF_ROUTER_MODEL env."""
+    model = os.getenv("HF_ROUTER_MODEL")
     if not model:
-        raise RuntimeError(f"Missing model id for kind={kind}. Set LLM_MODEL_GEN/REV.")
+        raise RuntimeError("Set HF_ROUTER_MODEL in env for HF Router.")
     return _router_call(prompt, max_tokens=256, temperature=0.0, model=model)
-
