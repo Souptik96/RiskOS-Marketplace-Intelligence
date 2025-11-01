@@ -18,7 +18,14 @@ def _call_llm(prompt: str, max_tokens: int = 512, temperature: float = 0.2, mode
         "stream": False
     }
 
-    resp = requests.post(ROUTER_URL, headers=headers, json=body, timeout=60)
+    try:
+        resp = requests.post(ROUTER_URL, headers=headers, json=body, timeout=60)
+    except requests.exceptions.ConnectionError as e:
+        # Log the actual error without falling back to port 8000
+        error_msg = f"HF Router connection failed: {str(e)}"
+        print(error_msg)
+        raise RuntimeError(error_msg)
+    
     if resp.status_code != 200:
         # Surface router/provider error clearly
         try:
