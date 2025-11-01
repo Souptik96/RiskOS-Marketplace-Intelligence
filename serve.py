@@ -61,5 +61,6 @@ def generate_metric(payload: dict):
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(api_app, host="0.0.0.0", port=int(os.getenv("PORT", "8501")))
+    
+    # Run FastAPI on different port to avoid conflict with Streamlit
+    uvicorn.run(api_app, host="0.0.0.0", port=int(os.getenv("FASTAPI_PORT", "7861")))
