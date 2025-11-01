@@ -57,4 +57,4 @@ def nl2sql(payload: GeneratePayload):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(api_app, host="0.0.0.0", port=int(os.getenv("PORT", "8502")))
+    uvicorn.run(api_app, host="0.0.0.0", port=int(os.getenv("PORT", "7861")))
