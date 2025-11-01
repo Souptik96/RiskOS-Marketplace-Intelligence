@@ -312,20 +312,20 @@ st.sidebar.caption(
     "Tables registered: " + (", ".join(dfs.keys()) if dfs else "none — upload to begin")
 )
 
-provider_default = os.getenv("LLM_PROVIDER", "fireworks").lower()
-provider_choices = ["fireworks", "hf"]
+provider_default = os.getenv("LLM_PROVIDER", "hf_router").lower()
+provider_choices = ["fireworks", "hf_router"]
 provider_index = provider_choices.index(provider_default) if provider_default in provider_choices else 0
 provider = st.sidebar.selectbox("Provider", provider_choices, index=provider_index)
 
 gen_default = os.getenv(
     "LLM_MODEL_GEN",
-    "accounts/fireworks/models/qwen3-coder-30b-a3b-instruct"
+    "Qwen/Qwen3-Coder-30B-A3B-Instruct:fireworks-ai"
     if provider == "fireworks"
     else "Qwen/Qwen2.5-1.5B-Instruct",
 )
 rev_default = os.getenv(
     "LLM_MODEL_REV",
-    "accounts/fireworks/models/qwen3-coder-30b-a3b-instruct"
+    "Qwen/Qwen3-Coder-30B-A3B-Instruct:fireworks-ai"
     if provider == "fireworks"
     else "Qwen/Qwen2.5-Coder-1.5B-Instruct",
 )
