@@ -1,6 +1,8 @@
 import os, requests, json
 
-ROUTER_URL = os.getenv("API_URL", "https://router.huggingface.co/v1/chat/completions")
+# Use a dedicated env var for the HF Router to avoid collisions
+ROUTER_URL = os.getenv("HF_ROUTER_URL") or "https://router.huggingface.co/v1/chat/completions"
+print("Router→", ROUTER_URL)
 DEFAULT_MODEL = os.getenv("HF_ROUTER_MODEL", "Qwen/Qwen3-Coder-30B-A3B-Instruct:fireworks-ai")
 
 
