@@ -28,7 +28,7 @@ REMOTE_ERROR_HINT = (
     "If you expect to use a remote backend, set the API_URL environment variable."
 )
 MISSING_MODEL_HINT = (
-    "Missing model configuration. Set FIREWORKS_API_KEY or HF_API_KEY along with LLM_MODEL_GEN and LLM_MODEL_REV."
+    "Missing model configuration. Set HF_TOKEN along with LLM_MODEL_GEN and LLM_MODEL_REV."
 )
 PROMPT_DASHBOARD = (
     "You are a data visualization expert. Based on the following data columns, suggest the best single chart to build. "
@@ -113,55 +113,23 @@ def _expected_tables(sql: str) -> List[str]:
 
 
 def _provider_has_creds(provider: str) -> bool:
-    if provider == "fireworks":
-        return bool(os.getenv("FIREWORKS_API_KEY"))
-    return bool(os.getenv("HF_API_KEY"))
+    # Unified on HF Router token
+    return bool(os.getenv("HF_TOKEN"))
 
 
 def _call_llm(provider: str, model: str, prompt: str) -> str:
+    # Unified LLM call using HF Router Chat Completions endpoint
     if not model:
         raise RuntimeError("Model name is required.")
-    if provider == "fireworks":
-        key = os.getenv("FIREWORKS_API_KEY", "")
-        if not key:
-            raise RuntimeError("FIREWORKS_API_KEY not set")
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "max_tokens": 400,
-            "temperature": 0.0,
-        }
-        headers = {"Authorization": f"Bearer {key}"}
-        resp = requests.post(
-            "https://api.fireworks.ai/inference/v1/completions".strip(),
-            json=payload,
-            headers=headers,
-            timeout=60,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        choices = data.get("choices") or []
-        if choices:
-            return (choices[0].get("text") or choices[0].get("message", {}).get("content", "")).strip()
-        return json.dumps(data)
-    key = os.getenv("HF_API_KEY", "")
-    if not key:
-        raise RuntimeError("HF_API_KEY not set")
-    payload = {"inputs": prompt, "parameters": {"max_new_tokens": 400, "temperature": 0.0}}
-    headers = {"Authorization": f"Bearer {key}", "x-use-cache": "false"}
-    resp = requests.post(
-        f"https://api-inference.huggingface.co/models/  {model}",
-        json=payload,
-        headers=headers,
-        timeout=60,
-    )
+    API_URL = os.getenv("LLM_API_URL", "https://router.huggingface.co/v1/chat/completions")
+    HEADERS = {"Authorization": f"Bearer {os.environ['HF_TOKEN']}", "Content-Type": "application/json"}
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    resp = requests.post(API_URL, headers=HEADERS, json=payload, timeout=60)
     resp.raise_for_status()
-    data = resp.json()
-    if isinstance(data, list) and data and "generated_text" in data[0]:
-        return data[0]["generated_text"]
-    if isinstance(data, dict) and "generated_text" in data:
-        return data["generated_text"]
-    return json.dumps(data)
+    return resp.json()["choices"][0]["message"]["content"]
 
 
 def _extract_sql_from_text(text: str) -> str:
