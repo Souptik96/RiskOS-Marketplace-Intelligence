@@ -1,0 +1,9 @@
+name: marketplace_intelligence_dbt
+version: '1.0'
+config-version: 2
+profile: duckdb_profile
+
+model-paths: ["models"]
+models:
+  +materialized: view
+

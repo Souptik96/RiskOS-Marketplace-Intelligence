@@ -8,6 +8,7 @@ import duckdb
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
+from typing import Any
 
 from .providers import extract_json, extract_sql, llm_call
 from .sql_safety import sanitize
@@ -203,3 +204,98 @@ def execute(q: str = Query(..., description="Business question or SQL to execute
         q if not _is_sql(q) else "Direct SQL execution", sql
     )
     return ExecResponse(sql=sql, rows=rows, review=review_payload)
+
+
+# -------------------- New BI Agent Endpoints --------------------
+
+class GenerateMetricRequest(BaseModel):
+    ask: str
+    metric_slug: Optional[str] = None
+
+
+class DBTRunRequest(BaseModel):
+    model: str
+
+
+def _agent_fallback(ask: str, metric_slug: Optional[str] = None) -> Dict[str, Any]:
+    # Fallback path that mimics the agent flow without langgraph dependency
+    from agent import nodes as N
+
+    state: Dict[str, Any] = {"ask": ask, "metric_slug": metric_slug}
+    state.update(N.intent_parse(state))
+    state.update(N.read_schema(state))
+    state.update(N.gen_sql(state))
+    state.update(N.validate_sql(state))
+    state.update(N.exec_sql(state))
+    N.write_dbt(state)
+    N.run_dbt(state)
+    return state
+
+
+@app.post("/agent/generate_metric")
+def generate_metric(req: GenerateMetricRequest):
+    try:
+        from agent import graph as agent_graph  # lazy import so tests not requiring langgraph can run
+        result = agent_graph.app.invoke({"ask": req.ask, "metric_slug": req.metric_slug})
+        # Pydantic State returns as model; convert to dict
+        state = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    except Exception:
+        state = _agent_fallback(req.ask, req.metric_slug)
+
+    # Build response
+    slug = state.get("metric_slug")
+    columns = state.get("columns") or []
+    # convert preview_csv to head_rows (list of dicts)
+    try:
+        import io, csv
+
+        rows: List[Dict[str, Any]] = []
+        csv_text = state.get("preview_csv") or ""
+        if csv_text:
+            reader = csv.DictReader(io.StringIO(csv_text))
+            rows = list(reader)
+    except Exception:
+        rows = []
+    return {"slug": slug, "columns": columns, "head_rows": rows}
+
+
+@app.post("/dbt/run")
+def dbt_run(req: DBTRunRequest):
+    import os
+    import subprocess
+    start = time.time()
+    env = os.environ.copy()
+    env.setdefault("DBT_PROFILES_DIR", os.path.abspath("profiles"))
+    args = ["dbt", "run", "-s", req.model, "--project-dir", os.path.abspath("dbt_project")]
+    try:
+        proc = subprocess.run(args, env=env, capture_output=True, text=True)
+        ok = proc.returncode == 0
+        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    except FileNotFoundError:
+        ok = False
+        out = "dbt command not found. Ensure dbt-core is installed."
+    return {"ok": ok, "seconds": round(time.time() - start, 3), "output": out[-4000:]}
+
+
+@app.post("/dbt/test")
+def dbt_test(req: DBTRunRequest):
+    import os
+    import subprocess
+    start = time.time()
+    env = os.environ.copy()
+    env.setdefault("DBT_PROFILES_DIR", os.path.abspath("profiles"))
+    args = ["dbt", "test", "-s", req.model, "--project-dir", os.path.abspath("dbt_project")]
+    try:
+        proc = subprocess.run(args, env=env, capture_output=True, text=True)
+        ok = proc.returncode == 0
+        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    except FileNotFoundError:
+        ok = False
+        out = "dbt command not found. Ensure dbt-core is installed."
+    return {"ok": ok, "seconds": round(time.time() - start, 3), "output": out[-4000:]}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("api.main:app", host="0.0.0.0", port=7861)

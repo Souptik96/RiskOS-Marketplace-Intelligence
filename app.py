@@ -9,6 +9,10 @@ import duckdb
 import pandas as pd
 import requests
 import streamlit as st
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 CACHE_ROOT = "/tmp/cache"
 os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(CACHE_ROOT, "transformers"))
@@ -375,6 +379,9 @@ api_url = st.sidebar.text_input(
     help="Set only if you have a compatible API that understands the uploaded schema.",
 )
 
+# Agent API URL for metric generation
+agent_api_url = os.getenv("AGENT_API_URL", "http://localhost:7861")
+
 st.title("Marketplace Intelligence — Upload → NL→SQL → Dashboard")
 if not dfs:
     st.warning("Upload at least one file to begin querying.")
@@ -389,6 +396,89 @@ if con is None:
     st.stop()
 
 st.session_state.setdefault("ask_results", None)
+
+# Generate Metric (dbt + Dashboard) Section
+st.sidebar.markdown("---")
+st.sidebar.subheader("Generate Metric (dbt + Dashboard)")
+
+metric_ask = st.sidebar.text_area("Free-text ask:", placeholder="Gross margin by category last quarter", height=100)
+metric_slug = st.sidebar.text_input("Optional metric slug:", placeholder="gross_margin_by_category")
+
+if st.sidebar.button("Generate Metric", key="generate_metric_btn"):
+    if not metric_ask.strip():
+        st.sidebar.warning("Please enter an ask description.")
+    else:
+        with st.sidebar.spinner("Generating metric via agent..."):
+            try:
+                response = requests.post(
+                    f"{agent_api_url}/agent/generate_metric",
+                    json={"ask": metric_ask, "metric_slug": metric_slug if metric_slug.strip() else None},
+                    timeout=120
+                )
+                response.raise_for_status()
+                result = response.json()
+                
+                # Store result in session state
+                st.session_state["metric_result"] = result
+                
+                # Show success message
+                st.sidebar.success(f"✅ Metric generated: {result.get('slug', 'unknown')}")
+                
+                # Create dashboard file
+                if result.get('slug'):
+                    try:
+                        from tools.viz_scaffold import make_dashboard
+                        dashboard_path = make_dashboard(
+                            root="dashboards", 
+                            slug=result['slug'], 
+                            title=result['slug'].replace('_', ' ').title()
+                        )
+                        st.session_state["dashboard_path"] = dashboard_path
+                        st.sidebar.success(f"📊 Dashboard created: {dashboard_path}")
+                    except Exception as dashboard_error:
+                        st.sidebar.error(f"Dashboard creation failed: {dashboard_error}")
+                
+            except requests.exceptions.ConnectionError:
+                st.sidebar.error(f"❌ Cannot connect to agent API at {agent_api_url}")
+                st.sidebar.info("Make sure the backend is running: uvicorn api.main:app --port 7861")
+            except Exception as e:
+                st.sidebar.error(f"❌ Error: {str(e)}")
+
+# Display metric results if available
+if "metric_result" in st.session_state:
+    result = st.session_state["metric_result"]
+    
+    st.markdown("## 📈 Generated Metric Results")
+    
+    # Display preview table
+    if result.get("head_rows"):
+        st.subheader(f"Preview: {result.get('slug', 'metric')}")
+        preview_df = pd.DataFrame(result["head_rows"])
+        if not preview_df.empty:
+            st.dataframe(preview_df, use_container_width=True)
+            st.caption(f"Showing {len(preview_df)} rows (limited preview)")
+        
+        # Display columns info
+        if result.get("columns"):
+            st.subheader("Available Columns")
+            st.write(", ".join(result["columns"]))
+    
+    # Dashboard navigation
+    if "dashboard_path" in st.session_state:
+        dashboard_path = st.session_state["dashboard_path"]
+        st.subheader("📊 Dashboard Actions")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔗 Open Dashboard Page", key="open_dashboard"):
+                try:
+                    st.switch_page(f"dashboards/{result['slug']}.py")
+                except Exception as e:
+                    st.error(f"Cannot switch to dashboard: {e}")
+                    st.info(f"You can manually run: streamlit run {dashboard_path}")
+        
+        with col2:
+            st.code(f"streamlit run {dashboard_path}", language="bash")
 
 
 def _handle_query(question: str) -> Dict[str, Any]:
