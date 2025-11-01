@@ -50,10 +50,5 @@ def _call_llm(prompt: str, max_tokens: int = 512, temperature: float = 0.2, mode
             raise RuntimeError(f"HF Router error {resp.status_code}: {resp.text}")
         data = resp.json()
         return data["choices"][0]["message"]["content"]
-
-    else:
-        raise RuntimeError(f"Unsupported LLM_PROVIDER={provider}")
-
-
-def _router_call(prompt: str, max_tokens: int = 512, temperature: float = 0.2, model: str | None = None) -> str:
-    return _call_llm(prompt, max_tokens=max_tokens, temperature=temperature, model=model)
+    except Exception:
+        raise RuntimeError(f"Unexpected HF Router response: {json.dumps(data)[:800]}")
