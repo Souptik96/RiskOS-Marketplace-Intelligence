@@ -1,3 +1,15 @@
+---
+title: SQL-to-Metrics BI Agent (Marketplace Intelligence)
+emoji: 📊
+colorFrom: blue
+colorTo: purple
+sdk: streamlit
+sdk_version: 1.32.0
+app_file: app.py
+pinned: false
+license: apache-2.0
+---
+
 # Marketplace Intelligence
 
 🛒 **Marketplace Intelligence** - AI-powered data analytics platform with dbt integration and automated dashboard generation.
