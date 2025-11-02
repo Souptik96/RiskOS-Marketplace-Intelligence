@@ -31,8 +31,6 @@ RUN python -c "import sys; sys.stderr = open('/dev/null', 'w'); from transformer
 COPY start.sh .
 RUN chmod +x start.sh
 
-# Expose both Streamlit and FastAPI ports
+ENV PORT=7860
 EXPOSE 7860 7861
-
-# Use the start script to run both services
-CMD ["./start.sh"]
+CMD ["bash","/app/start.sh"]
