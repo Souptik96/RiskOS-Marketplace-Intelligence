@@ -1,75 +1,51 @@
-import os
-import re
-import io
-import json
-from typing import Dict, List, Optional, Any
-
-import chardet
-import duckdb
+import os, io, re, json
+from typing import Dict, List, Optional, Any, Tuple
 import pandas as pd
+import duckdb
+import chardet
 import requests
-from api.inference import _call_llm
-import streamlit as st
+import gradio as gr
 from dotenv import load_dotenv
+from api.inference import _call_llm
 
-# Load environment variables
 load_dotenv()
 
-CACHE_ROOT = "/tmp/cache"
-os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(CACHE_ROOT, "transformers"))
-os.environ.setdefault("HF_HOME", os.path.join(CACHE_ROOT, "hf"))
-os.environ.setdefault("HF_HUB_CACHE", os.path.join(CACHE_ROOT, "hf", "hub"))
-os.environ.setdefault("XDG_CACHE_HOME", CACHE_ROOT)
-os.makedirs(CACHE_ROOT, exist_ok=True)
-
-st.set_page_config(page_title="Marketplace Intelligence — Upload & Query", layout="wide")
-
-REMOTE_ERROR_HINT = (
-    "Unable to reach the remote API. Falling back to in-process mode. "
-    "If you expect to use a remote backend, set the API_URL environment variable."
-)
-MISSING_MODEL_HINT = (
-    "Missing model configuration. Set HF_TOKEN along with LLM_MODEL_GEN and LLM_MODEL_REV."
-)
-PROMPT_DASHBOARD = (
-    "You are a data visualization expert. Based on the following data columns, suggest the best single chart to build. "
-    "Your response must be a single JSON object with \"chart_type\" (choose from \"bar\", \"line\", \"scatter\"), "
-    "\"x_column\", and \"y_column\".\n\nColumns: {column_info}\nJSON:"
-)
+# ---- Globals ----
+DFS: Dict[str, pd.DataFrame] = {}
+CON: Optional[duckdb.DuckDBPyConnection] = None
+AGENT_API_URL = os.getenv("AGENT_API_URL", "http://localhost:7861")
+PROVIDER = (os.getenv("LLM_PROVIDER") or "fireworks").lower()
+FW_MODEL = os.getenv("FIREWORKS_MODEL_ID", "accounts/fireworks/models/gpt-oss-20b")
 
 
 def _sanitize(name: str) -> str:
-    cleaned = re.sub(r"[^a-zA-Z0-9_]", "_", name).lower().strip("_")
-    return cleaned or "table"
+    return re.sub(r"[^a-zA-Z0-9_]", "_", name).lower().strip("_") or "table"
 
 
-@st.cache_data(show_spinner=False)
 def _load_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
     name = filename.lower()
-    buffer = io.BytesIO(file_bytes)
+    buf = io.BytesIO(file_bytes)
     if name.endswith((".xlsx", ".xls")):
-        return pd.read_excel(buffer)
+        return pd.read_excel(buf)
     if name.endswith(".jsonl"):
-        buffer.seek(0)
-        return pd.read_json(buffer, lines=True)
+        buf.seek(0)
+        return pd.read_json(buf, lines=True)
     if name.endswith((".txt", ".tsv")):
-        buffer.seek(0)
-        return pd.read_csv(buffer, sep=None, engine="python")
+        buf.seek(0)
+        return pd.read_csv(buf, sep=None, engine="python")
     try:
-        buffer.seek(0)
-        return pd.read_csv(buffer, sep=None, engine="python")
+        buf.seek(0)
+        return pd.read_csv(buf, sep=None, engine="python")
     except Exception:
-        buffer.seek(0)
+        buf.seek(0)
         enc = chardet.detect(file_bytes).get("encoding") or "utf-8"
-        return pd.read_csv(buffer, sep=None, engine="python", encoding=enc)
+        return pd.read_csv(buf, sep=None, engine="python", encoding=enc)
 
 
-def _register_tables(dfs: Dict[str, pd.DataFrame]) -> Optional[duckdb.DuckDBPyConnection]:
-    if not dfs:
-        return None
+def _register_tables(dfs: Dict[str, pd.DataFrame]) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
-    for table, df in dfs.items():
-        con.register(table, df)
+    for t, df in dfs.items():
+        con.register(t, df)
     return con
 
 
@@ -80,542 +56,137 @@ def _schema_for_prompt(con: Optional[duckdb.DuckDBPyConnection]) -> str:
         """
         SELECT table_name, column_name, data_type
         FROM information_schema.columns
-        WHERE table_schema = 'main'
+        WHERE table_schema='main'
         ORDER BY table_name, ordinal_position
         """
     ).fetchall()
     layout: Dict[str, List[str]] = {}
-    for table, column, dtype in rows:
-        layout.setdefault(table, []).append(f"{column} {dtype}")
-    return "\n".join([f"Table {tbl}({', '.join(cols)})." for tbl, cols in layout.items()])
+    for table, col, dtype in rows:
+        layout.setdefault(table, []).append(f"{col} {dtype}")
+    return "\n".join([f"Table {t}({', '.join(cols)})." for t, cols in layout.items()])
 
 
 def _enforce_limits(sql: str) -> str:
-    # Take only the first SQL statement and strip whitespaces
-    statement = sql.split(';')[0].strip()
-
-    if not statement:
-        raise ValueError("Empty SQL statement")
-    
-    lowered = statement.lower()
-    if not (lowered.startswith("select") or lowered.startswith("with")):
+    stmt = (sql or "").split(";")[0].strip()
+    if not stmt:
+        raise ValueError("Empty SQL")
+    lo = stmt.lower()
+    if not (lo.startswith("select") or lo.startswith("with")):
         raise ValueError("Only SELECT/CTE statements are allowed.")
-    
-    if not re.search(r'\blimit\b', lowered):
-        statement += " LIMIT 200"
-    return statement
-
-
-def _expected_tables(sql: str) -> List[str]:
-    tables = re.findall(r"(?i)\bfrom\s+([\w\.]+)", sql)
-    tables += re.findall(r"(?i)\bjoin\s+([\w\.]+)", sql)
-    sanitized = {_sanitize(name.split(".")[-1]) for name in tables}
-    return sorted(filter(None, sanitized))
-
-
-def _provider_has_creds(provider: str) -> bool:
-    return bool(os.getenv("FIREWORKS_API_KEY")) if provider == "fireworks" \
-           else bool(os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN"))
-
-
-## Removed local LLM wrapper; use api.inference._call_llm directly
+    if " limit " not in f" {lo} ":
+        stmt += " LIMIT 200"
+    return stmt
 
 
 def _extract_sql_from_text(text: str) -> str:
-    fenced = re.search(r"sql\s*(.*?)", text, flags=re.I | re.S)
+    fenced = re.search(r"```sql\s*(.*?)```", text, flags=re.I | re.S)
     if fenced:
         return fenced.group(1).strip()
-    generic = re.search(r"(.*?)", text, flags=re.S)
-    if generic:
-        block = generic.group(1).strip()
-        if re.search(r"(?is)\bselect\b", block):
-            return block
     fallback = re.search(r"(?is)\b(select|with)\b.*", text)
-    if fallback:
-        return fallback.group(0).strip()
-    return text.strip()
+    return (fallback.group(0).strip() if fallback else text.strip())
 
 
-def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-    match = re.search(r"\{.*\}", text, flags=re.S)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
+def upload_files(files: List[gr.File]) -> Tuple[str, str]:
+    global DFS, CON
+    DFS = {}
+    for f in files or []:
+        with open(f.name, "rb") as fh:
+            data = fh.read()
+        df = _load_file(data, os.path.basename(f.name))
+        t = _sanitize(os.path.basename(f.name).rsplit(".", 1)[0])
+        while t in DFS:
+            t += "_u"
+        DFS[t] = df
+    CON = _register_tables(DFS) if DFS else None
+    schema = _schema_for_prompt(CON)
+    return (", ".join(DFS.keys()) or "none"), (schema or "No tables registered.")
 
 
-def _gen_sql(question: str, schema: str, provider: str, model: str, api_url: str) -> str:
+def gen_sql_and_run(question: str) -> Tuple[str, pd.DataFrame, str]:
     if not question.strip():
-        raise ValueError("Question cannot be empty.")
+        return "Question empty.", pd.DataFrame(), ""
+    schema = _schema_for_prompt(CON)
     prompt = (
         "You convert business questions into DuckDB SQL ONLY.\n"
-        "Use these tables:\n"
-        f"{schema if schema else 'No tables were provided.'}\n"
+        f"Use these tables:\n{schema or 'No tables were provided.'}\n"
         "Return only SQL without commentary.\n"
         f"Question: {question}\nSQL:"
     )
-    if api_url:
-        try:
-            resp = requests.post(
-                api_url.rstrip('/') + '/nl2sql',
-                json={"q": question, "schema": schema},
-                timeout=60,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-            candidate = payload.get("sql") if isinstance(payload, dict) else str(payload)
-            return _enforce_limits(candidate)
-        except Exception:
-            st.warning(REMOTE_ERROR_HINT)
-    llm_output = _call_llm(
-        prompt,
-        max_tokens=400,
-        temperature=0.0,
-        model=(model or os.getenv("FIREWORKS_MODEL_ID")),
-        provider=provider,
-    )
-    return _enforce_limits(_extract_sql_from_text(llm_output))
+    raw = _call_llm(prompt, max_tokens=400, temperature=0.0, model=FW_MODEL, provider=PROVIDER)
+    sql = _enforce_limits(_extract_sql_from_text(raw))
+    df = pd.DataFrame()
+    err = ""
+    try:
+        df = CON.execute(sql).df() if CON else pd.DataFrame()
+        if df.empty:
+            err = "Query executed but returned no rows."
+    except Exception as e:
+        err = str(e)
+    return sql, (df.head(200) if not df.empty else pd.DataFrame()), err
 
 
-def _basic_review(question: str, sql: str, rows: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
-    lowered = " ".join(sql.lower().split())
-    analysis = {
-        "has_limit": " limit " in f" {lowered} ",
-        "targets_tables": [
-            t for t in ("daily_product_sales", "orders", "products") if t in lowered
-        ],
-        "has_group_by": "group by" in lowered,
-        "has_aggregation": any(
-            token in lowered for token in ("sum(", "avg(", "count(", "min(", "max(", "group by")
-        ),
-    }
-    issues: List[str] = []
-    warnings: List[str] = []
-    stripped = lowered.strip()
-    if not (stripped.startswith("select") or stripped.startswith("with")):
-        issues.append("Only SELECT/CTE statements are supported in this interface.")
-    forbidden = [kw for kw in ("insert", "update", "delete", "drop", "alter") if kw in lowered]
-    if forbidden:
-        issues.append(f"Detected disallowed keywords: {', '.join(forbidden)}")
-    if not analysis["has_limit"]:
-        warnings.append("Add LIMIT to keep dashboards responsive.")
-    if not analysis["targets_tables"]:
-        warnings.append("Query does not reference a known table.")
-    if rows is not None and len(rows) == 0:
-        warnings.append("Query returned zero rows for the selected filters.")
-    summary = "SQL validated successfully."
-    if issues:
-        summary = "SQL failed validation due to critical issues."
-    elif warnings:
-        summary = "SQL is valid but review the warnings before finalizing."
-    return {
-        "valid": not issues,
-        "summary": summary,
-        "issues": issues,
-        "warnings": warnings,
-        "analysis": analysis,
-        "question": question,
-    }
-
-
-def _review_sql(question: str, sql: str, schema: str, provider: str, model: str) -> Dict[str, Any]:
+def review_sql(question: str, sql: str) -> str:
+    schema = _schema_for_prompt(CON)
     prompt = (
         "You are a senior BI reviewer. Assess SQL for intent, correctness, and produce fixes when needed.\n"
-        "Schema:\n"
-        f"{schema if schema else 'No schema provided.'}\n"
+        f"Schema:\n{schema or 'No schema provided.'}\n"
         f"Question: {question or 'N/A'}\n"
-        "SQL:\n"
-        f"{sql}\n"
-        "Return JSON with keys reasoning, ok (true/false), fixed_sql."
+        f"SQL:\n{sql}\n"
+        'Return JSON with keys reasoning, ok (true/false), fixed_sql.'
     )
     try:
-        llm_response = _call_llm(
-            prompt,
-            max_tokens=400,
-            temperature=0.0,
-            model=(model or os.getenv("FIREWORKS_MODEL_ID")),
-            provider=provider,
-        )
-        parsed = _extract_json(llm_response)
-        if parsed:
-            return parsed
-        st.info("Review model returned non-JSON output; using heuristic checks instead.")
-    except Exception as exc:
-        st.info(f"Review fallback: {exc}")
-    return _basic_review(question, sql, None)
+        return _call_llm(prompt, max_tokens=400, temperature=0.0, model=FW_MODEL, provider=PROVIDER)
+    except Exception as e:
+        return json.dumps({"ok": False, "reason": str(e)})
 
 
-def _execute_sql(con: duckdb.DuckDBPyConnection, sql: str) -> pd.DataFrame:
-    statement = _enforce_limits(sql)
-    return con.execute(statement).df()
-
-
-def _render_placeholder(summary: str, expected: List[str]) -> None:
-    expected_text = ", ".join(expected) if expected else "review your uploaded tables."
-    st.info(f"{summary}\nExpected tables: {expected_text}")
-
-
-def _render_charts(df: pd.DataFrame) -> None:
-    if {"product_title", "revenue"}.issubset(df.columns):
-        st.write("### Revenue by Product")
-        st.bar_chart(df.set_index("product_title")["revenue"], use_container_width=True)
-    date_cols = [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col])]
-    if date_cols and "revenue" in df.columns:
-        st.write("### Revenue Over Time")
-        time_df = df.groupby(date_cols[0])["revenue"].sum().sort_index()
-        st.line_chart(time_df, use_container_width=True)
-    numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    if len(numeric_cols) >= 2:
-        st.write("### Numeric Overview")
-        st.area_chart(df[numeric_cols[:2]], use_container_width=True)
-
-
-def _suggest_chart(df: pd.DataFrame, provider: str, model: str) -> Optional[Dict[str, Any]]:
-    if df.empty or not _provider_has_creds(provider):
-        return None
-    column_info = ", ".join(f"{col} ({df[col].dtype})" for col in df.columns)
-    prompt = PROMPT_DASHBOARD.format(column_info=column_info)
+def generate_metric(ask: str, slug: str) -> str:
     try:
-        raw = _call_llm(
-            prompt,
-            max_tokens=400,
-            temperature=0.0,
-            model=(model or os.getenv("FIREWORKS_MODEL_ID")),
-            provider=provider,
-        )
-        parsed = _extract_json(raw)
-        if isinstance(parsed, dict):
-            chart_type = parsed.get("chart_type")
-            if chart_type in {"bar", "line", "scatter"}:
-                return parsed
-    except Exception as exc:
-        st.info(f"Chart suggestion fallback: {exc}")
-    return None
+        payload = {"ask": ask, "metric_slug": slug or None}
+        r = requests.post(f"{AGENT_API_URL}/agent/generate_metric", json=payload, timeout=120)
+        r.raise_for_status()
+        return json.dumps(r.json(), indent=2)
+    except Exception as e:
+        return f"ERROR: {e}"
 
 
-uploaded_files = st.sidebar.file_uploader(
-    "Upload CSV/XLSX/TXT/JSONL (multi)",
-    type=["csv", "xlsx", "xls", "tsv", "txt", "jsonl"],
-    accept_multiple_files=True,
-)
+with gr.Blocks(title="Marketplace Intelligence (Gradio)") as demo:
+    gr.Markdown("# Marketplace Intelligence — Upload → NL→SQL → Metric")
+    with gr.Row():
+        files = gr.File(label="Upload CSV/XLSX/TSV/TXT/JSONL (multi)", file_count="multiple")
+    with gr.Row():
+        btn_up = gr.Button("Register Tables")
+        tables_out = gr.Textbox(label="Tables")
+        schema_out = gr.Textbox(label="Schema")
+    btn_up.click(upload_files, inputs=[files], outputs=[tables_out, schema_out])
 
-dfs: Dict[str, pd.DataFrame] = {}
-if uploaded_files:
-    for file in uploaded_files:
-        data = file.getvalue()
-        if len(data) > 50 * 1024 * 1024:
-            st.warning(f"{file.name} skipped (exceeds 50 MB limit).")
-            continue
-        df = _load_file(data, file.name)
-        table_name = _sanitize(file.name.rsplit(".", 1)[0])
-        while table_name in dfs:
-            table_name += "_u"
-        dfs[table_name] = df
-else:
-    try:
-        sample = pd.read_csv("data/daily_product_sales.csv", parse_dates=["day"])
-        sample["day"] = sample["day"].dt.date
-        dfs["daily_product_sales"] = sample
-    except Exception:
-        dfs = {}
+    gr.Markdown("## Ask (Business → SQL → Run)")
+    q = gr.Textbox(label="Business Question", value="Top 5 electronics products by revenue in Q3")
+    btn_run = gr.Button("Generate SQL & Run")
+    sql_out = gr.Code(label="Generated SQL", language="sql")
+    df_out = gr.Dataframe(label="Preview (first 200 rows)")
+    err_out = gr.Textbox(label="Errors / Notes")
+    btn_run.click(gen_sql_and_run, inputs=[q], outputs=[sql_out, df_out, err_out])
 
-con = _register_tables(dfs)
-schema = _schema_for_prompt(con)
+    gr.Markdown("## Review SQL")
+    rq = gr.Textbox(label="Optional context", value="Top 10 beauty products in Q2")
+    rsql = gr.Code(label="SQL to review", value="SELECT category, SUM(revenue) AS revenue FROM daily_product_sales GROUP BY category ORDER BY revenue DESC LIMIT 5;", language="sql")
+    btn_rev = gr.Button("Review")
+    rev_out = gr.Code(label="AI Review (JSON)")
+    btn_rev.click(review_sql, inputs=[rq, rsql], outputs=[rev_out])
 
-st.sidebar.caption(
-    "Tables registered: " + (", ".join(dfs.keys()) if dfs else "none — upload to begin")
-)
-
-provider = (os.getenv("LLM_PROVIDER") or "fireworks").lower()
-fw_fallback = os.getenv("FIREWORKS_MODEL_ID", "accounts/fireworks/models/gpt-oss-20b")
-gen_model = os.getenv("LLM_MODEL_GEN", fw_fallback)
-rev_model = os.getenv("LLM_MODEL_REV", fw_fallback)
-api_url = ""
-
-# Agent API URL for metric generation
-agent_api_url = os.getenv("AGENT_API_URL", "http://localhost:7861")
-
-st.title("Marketplace Intelligence — Upload → NL→SQL → Dashboard")
-if not dfs:
-    st.warning("Upload at least one file to begin querying.")
-
-with st.sidebar.expander("Schema", expanded=False):
-    if schema:
-        st.text(schema)
-    else:
-        st.info("No tables available yet.")
-
-if con is None:
-    st.stop()
-
-st.session_state.setdefault("ask_results", None)
-
-# Generate Metric (dbt + Dashboard) Section
-st.sidebar.markdown("---")
-st.sidebar.subheader("Generate Metric (dbt + Dashboard)")
-
-metric_ask = st.sidebar.text_area("Free-text ask:", placeholder="Gross margin by category last quarter", height=100)
-metric_slug = st.sidebar.text_input("Optional metric slug:", placeholder="gross_margin_by_category")
-
-if st.sidebar.button("Generate Metric", key="generate_metric_btn"):
-    if not metric_ask.strip():
-        st.sidebar.warning("Please enter an ask description.")
-    else:
-        with st.sidebar.spinner("Generating metric via agent..."):
-            try:
-                response = requests.post(
-                    f"{agent_api_url}/agent/generate_metric",
-                    json={"ask": metric_ask, "metric_slug": metric_slug if metric_slug.strip() else None},
-                    timeout=120
-                )
-                response.raise_for_status()
-                result = response.json()
-                
-                # Store result in session state
-                st.session_state["metric_result"] = result
-                
-                # Show success message
-                st.sidebar.success(f"✅ Metric generated: {result.get('slug', 'unknown')}")
-                
-                # Create dashboard file
-                if result.get('slug'):
-                    try:
-                        from tools.viz_scaffold import make_dashboard
-                        dashboard_path = make_dashboard(
-                            root="dashboards", 
-                            slug=result['slug'], 
-                            title=result['slug'].replace('_', ' ').title()
-                        )
-                        st.session_state["dashboard_path"] = dashboard_path
-                        st.sidebar.success(f"📊 Dashboard created: {dashboard_path}")
-                    except Exception as dashboard_error:
-                        st.sidebar.error(f"Dashboard creation failed: {dashboard_error}")
-                
-            except requests.exceptions.ConnectionError:
-                st.sidebar.error(f"❌ Cannot connect to agent API at {agent_api_url}")
-                st.sidebar.info("Make sure the backend is running: uvicorn api.main:app --port 7861")
-            except Exception as e:
-                st.sidebar.error(f"❌ Error: {str(e)}")
-
-# Display metric results if available
-if "metric_result" in st.session_state:
-    result = st.session_state["metric_result"]
-    
-    st.markdown("## 📈 Generated Metric Results")
-    
-    # Display preview table
-    if result.get("head_rows"):
-        st.subheader(f"Preview: {result.get('slug', 'metric')}")
-        preview_df = pd.DataFrame(result["head_rows"])
-        if not preview_df.empty:
-            st.dataframe(preview_df, use_container_width=True)
-            st.caption(f"Showing {len(preview_df)} rows (limited preview)")
-        
-        # Display columns info
-        if result.get("columns"):
-            st.subheader("Available Columns")
-            st.write(", ".join(result["columns"]))
-    
-    # Dashboard navigation
-    if "dashboard_path" in st.session_state:
-        dashboard_path = st.session_state["dashboard_path"]
-        st.subheader("📊 Dashboard Actions")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🔗 Open Dashboard Page", key="open_dashboard"):
-                try:
-                    st.switch_page(f"dashboards/{result['slug']}.py")
-                except Exception as e:
-                    st.error(f"Cannot switch to dashboard: {e}")
-                    st.info(f"You can manually run: streamlit run {dashboard_path}")
-        
-        with col2:
-            st.code(f"streamlit run {dashboard_path}", language="bash")
+    gr.Markdown("## Generate Metric (dbt + Dashboard)")
+    mask = gr.Textbox(label="Free-text ask", value="Gross margin by category last quarter")
+    mslug = gr.Textbox(label="Optional metric slug", value="gross_margin_by_category")
+    btn_metric = gr.Button("Generate Metric via Agent")
+    metric_out = gr.Code(label="Agent Result (JSON)")
+    btn_metric.click(generate_metric, inputs=[mask, mslug], outputs=[metric_out])
 
 
-def _handle_query(question: str) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"question": question}
-    use_remote = bool(api_url) and not uploaded_files
-    sql = None
-    chart = None
-    error: Optional[str] = None
-    df: pd.DataFrame = pd.DataFrame()
-    review_payload: Optional[Dict[str, Any]] = None
-
-    if use_remote:
-        try:
-            payload = requests.get(
-                api_url.rstrip('/') + '/execute',
-                params={"q": question},
-                timeout=60,
-            )
-            payload.raise_for_status()
-            data = payload.json()
-            sql = data.get("sql", "")
-            df = pd.DataFrame(data.get("rows", []))
-            review_payload = data.get("review")
-            chart = data.get("chart_suggestion")
-            error = None if not data.get("error") else data["error"]
-        except Exception as exc:
-            st.warning(f"Remote execution failed ({exc}). Falling back to local mode.")
-            use_remote = False
-
-    if not use_remote:
-        sql = _gen_sql(question, schema, provider, gen_model, "")
-        try:
-            df = _execute_sql(con, sql)
-        except Exception as exc:
-            df = pd.DataFrame()
-            error = str(exc)
-        if df.empty and error is None:
-            error = "Query executed but returned no rows."
-        try:
-            review_payload = _review_sql(question, sql, schema, provider, rev_model)
-        except Exception as exc:
-            review_payload = {"summary": f"Review failed: {exc}"}
-        if error is None:
-            chart = _suggest_chart(df, provider, gen_model)
-
-    result.update(
-        {
-            "sql": sql or "",
-            "df": df,
-            "review": review_payload,
-            "error": error,
-            "expected": _expected_tables(sql or ""),
-            "chart": chart,
-        }
-    )
-    return result
+def launch():
+    port = int(os.getenv("PORT", "7860"))
+    demo.launch(server_name="0.0.0.0", server_port=port, show_error=True, inbrowser=False)
 
 
-tabs = st.tabs(["Ask (Business to SQL)", "Review SQL", "Generate Dashboard"])
-
-with tabs[0]:
-    default_question = "Top 5 electronics products by revenue in Q3"
-    question = st.text_input("Enter business question", default_question)
-    if st.button("Generate & Run", key="ask_run"):
-        if not question.strip():
-            st.warning("Please enter a question first.")
-        else:
-            with st.spinner("Generating SQL and executing..."):
-                st.session_state["ask_results"] = _handle_query(question)
-    results = st.session_state.get("ask_results")
-    if results:
-        st.subheader("Generated SQL")
-        st.code(results.get("sql", ""), language="sql")
-        if results.get("error"):
-            st.error(results["error"])
-            _render_placeholder(
-                "Placeholder: Unable to execute with current tables.",
-                results.get("expected", []),
-            )
-        else:
-            df = results.get("df", pd.DataFrame())
-            if df.empty:
-                st.warning("No rows returned for this question.")
-                _render_placeholder(
-                    "Placeholder: Result set was empty. Upload additional tables or adjust filters.",
-                    results.get("expected", []),
-                )
-            else:
-                st.dataframe(df, use_container_width=True)
-                chart = results.get("chart")
-                if isinstance(chart, dict):
-                    st.subheader("Suggested Chart")
-                    chart_type = chart.get("chart_type")
-                    x_col = chart.get("x_column")
-                    y_col = chart.get("y_column")
-                    if chart_type == "bar" and x_col in df.columns and y_col in df.columns:
-                        st.bar_chart(df.set_index(x_col)[y_col], use_container_width=True)
-                    elif chart_type == "line" and x_col in df.columns and y_col in df.columns:
-                        st.line_chart(df.set_index(x_col)[y_col], use_container_width=True)
-                    elif chart_type == "scatter" and x_col in df.columns and y_col in df.columns:
-                        st.scatter_chart(df[[x_col, y_col]], use_container_width=True)
-                    else:
-                        st.caption("Chart suggestion incomplete; displaying standard summaries.")
-                _render_charts(df)
-        review_payload = results.get("review")
-        if review_payload:
-            st.subheader("AI Review")
-            st.json(review_payload)
-
-with tabs[1]:
-    st.caption("Validate SQL snippets or natural language prompts before execution.")
-    review_question = st.text_area("Optional context", "Top 10 beauty products in Q2", height=100)
-    review_sql = st.text_area(
-        "SQL to review",
-        "SELECT category, SUM(revenue) AS revenue\nFROM daily_product_sales\nGROUP BY category\nORDER BY revenue DESC\nLIMIT 5;",
-        height=160,
-    )
-    if st.button("Review", key="review_sql_button"):
-        if not review_sql.strip():
-            st.warning("Provide SQL to review.")
-        else:
-            with st.spinner("Reviewing SQL..."):
-                payload = _review_sql(review_question, review_sql, schema, provider, rev_model)
-            st.json(payload)
-
-with tabs[2]:
-    st.subheader("Auto-Generated Dashboard")
-    st.caption("Filter and visualize sales data with live queries against the in-memory DuckDB instance.")
-    if "daily_product_sales" not in dfs:
-        _render_placeholder(
-            "Placeholder: Upload a table with day/category/units/revenue to enable this dashboard.",
-            ["daily_product_sales"],
-        )
-    else:
-        base_df = dfs["daily_product_sales"]
-        required_cols = {"category", "day", "revenue"}
-        if not required_cols.issubset(base_df.columns):
-            _render_placeholder(
-                "Placeholder: Upload a table containing category, day, and revenue columns to enable this dashboard.",
-                ["daily_product_sales"],
-            )
-        else:
-            available_categories = sorted(base_df["category"].dropna().unique())
-            default_start = pd.to_datetime(base_df["day"].min()) if "day" in base_df.columns else pd.Timestamp("2024-01-01")
-            default_end = pd.to_datetime(base_df["day"].max()) if "day" in base_df.columns else pd.Timestamp("2024-12-31")
-            with st.form("dashboard_filters"):
-                selected_categories = st.multiselect(
-                    "Filter by category",
-                    options=available_categories,
-                    default=available_categories,
-                )
-                col_start, col_end = st.columns(2)
-                with col_start:
-                    start_date = st.date_input("Start date", default_start.date())
-                with col_end:
-                    end_date = st.date_input("End date", default_end.date())
-                refresh = st.form_submit_button("Refresh Dashboard")
-            if refresh:
-                filters = "\n    AND category IN ({})".format(
-                    ", ".join(f"'{c}'" for c in selected_categories)
-                ) if selected_categories else ""
-                dash_sql = f"""
-SELECT product_title, category, day, units, revenue
-FROM daily_product_sales
-WHERE day BETWEEN DATE '{start_date}' AND DATE '{end_date}'{filters}
-ORDER BY day ASC, revenue DESC
-LIMIT 200;
-"""
-                try:
-                    dash_df = _execute_sql(con, dash_sql)
-                    if dash_df.empty:
-                        st.warning("No data available for the selected filters.")
-                        _render_placeholder(
-                            "Placeholder: Upload more granular sales data to populate this dashboard.",
-                            ["daily_product_sales"],
-                        )
-                    else:
-                        st.dataframe(dash_df.head(50), use_container_width=True)
-                        _render_charts(dash_df)
-                except Exception as exc:
-                    st.error(f"Dashboard query failed: {exc}")
-                    _render_placeholder(
-                        "Placeholder: Dashboard requires tables with day/category/units/revenue columns.",
-                        ["daily_product_sales"]
-                    )
+if __name__ == "__main__":
+    launch()
