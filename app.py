@@ -8,7 +8,7 @@ import chardet
 import duckdb
 import pandas as pd
 import requests
-from api.inference import _call_llm as _router_call
+from api.inference import _call_llm
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -114,13 +114,11 @@ def _expected_tables(sql: str) -> List[str]:
 
 
 def _provider_has_creds(provider: str) -> bool:
-    # Unified on HF Router token
-    return bool(os.getenv("HF_TOKEN"))
+    return bool(os.getenv("FIREWORKS_API_KEY")) if provider == "fireworks" \
+           else bool(os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN"))
 
 
-def _call_llm(provider: str, model: str, prompt: str) -> str:
-    # Delegate to unified HF Router call; always use HF_ROUTER_MODEL with the router
-    return _router_call(prompt, max_tokens=400, temperature=0.0, model=os.getenv('HF_ROUTER_MODEL'))
+## Removed local LLM wrapper; use api.inference._call_llm directly
 
 
 def _extract_sql_from_text(text: str) -> str:
@@ -171,7 +169,13 @@ def _gen_sql(question: str, schema: str, provider: str, model: str, api_url: str
             return _enforce_limits(candidate)
         except Exception:
             st.warning(REMOTE_ERROR_HINT)
-    llm_output = _router_call(prompt, max_tokens=400, temperature=0.0, model=os.getenv('HF_ROUTER_MODEL'))
+    llm_output = _call_llm(
+        prompt,
+        max_tokens=400,
+        temperature=0.0,
+        model=(model or os.getenv("FIREWORKS_MODEL_ID")),
+        provider=provider,
+    )
     return _enforce_limits(_extract_sql_from_text(llm_output))
 
 
@@ -227,7 +231,13 @@ def _review_sql(question: str, sql: str, schema: str, provider: str, model: str)
         "Return JSON with keys reasoning, ok (true/false), fixed_sql."
     )
     try:
-        llm_response = _router_call(prompt, max_tokens=400, temperature=0.0, model=os.getenv('HF_ROUTER_MODEL'))
+        llm_response = _call_llm(
+            prompt,
+            max_tokens=400,
+            temperature=0.0,
+            model=(model or os.getenv("FIREWORKS_MODEL_ID")),
+            provider=provider,
+        )
         parsed = _extract_json(llm_response)
         if parsed:
             return parsed
@@ -268,7 +278,13 @@ def _suggest_chart(df: pd.DataFrame, provider: str, model: str) -> Optional[Dict
     column_info = ", ".join(f"{col} ({df[col].dtype})" for col in df.columns)
     prompt = PROMPT_DASHBOARD.format(column_info=column_info)
     try:
-        raw = _router_call(prompt, max_tokens=400, temperature=0.0, model=os.getenv('HF_ROUTER_MODEL'))
+        raw = _call_llm(
+            prompt,
+            max_tokens=400,
+            temperature=0.0,
+            model=(model or os.getenv("FIREWORKS_MODEL_ID")),
+            provider=provider,
+        )
         parsed = _extract_json(raw)
         if isinstance(parsed, dict):
             chart_type = parsed.get("chart_type")
@@ -312,31 +328,11 @@ st.sidebar.caption(
     "Tables registered: " + (", ".join(dfs.keys()) if dfs else "none — upload to begin")
 )
 
-provider_default = os.getenv("LLM_PROVIDER", "hf_router").lower()
-provider_choices = ["fireworks", "hf_router"]
-provider_index = provider_choices.index(provider_default) if provider_default in provider_choices else 0
-provider = st.sidebar.selectbox("Provider", provider_choices, index=provider_index)
-
-gen_default = os.getenv(
-    "LLM_MODEL_GEN",
-    "Qwen/Qwen3-Coder-30B-A3B-Instruct:fireworks-ai"
-    if provider == "fireworks"
-    else "Qwen/Qwen2.5-1.5B-Instruct",
-)
-rev_default = os.getenv(
-    "LLM_MODEL_REV",
-    "Qwen/Qwen3-Coder-30B-A3B-Instruct:fireworks-ai"
-    if provider == "fireworks"
-    else "Qwen/Qwen2.5-Coder-1.5B-Instruct",
-)
-
-gen_model = st.sidebar.text_input("Generation model", value=gen_default)
-rev_model = st.sidebar.text_input("Review model", value=rev_default)
-api_url = st.sidebar.text_input(
-    "Optional backend API base URL",
-    value=os.getenv("API_URL", ""),
-    help="Set only if you have a compatible API that understands the uploaded schema.",
-)
+provider = (os.getenv("LLM_PROVIDER") or "fireworks").lower()
+fw_fallback = os.getenv("FIREWORKS_MODEL_ID", "accounts/fireworks/models/gpt-oss-20b")
+gen_model = os.getenv("LLM_MODEL_GEN", fw_fallback)
+rev_model = os.getenv("LLM_MODEL_REV", fw_fallback)
+api_url = ""
 
 # Agent API URL for metric generation
 agent_api_url = os.getenv("AGENT_API_URL", "http://localhost:7861")
