@@ -3,7 +3,7 @@ title: SQL-to-Metrics BI Agent (Marketplace Intelligence)
 emoji: 📊
 colorFrom: blue
 colorTo: purple
-sdk: streamlit
+sdk: docker
 sdk_version: 1.51.0
 app_file: app.py
 pinned: false
