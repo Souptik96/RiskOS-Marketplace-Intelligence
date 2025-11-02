@@ -1,4 +1,6 @@
 ﻿# Production dependencies
+gradio
+docker
 pydantic==2.9.2
 duckdb==1.1.1
 pandas==2.2.3
