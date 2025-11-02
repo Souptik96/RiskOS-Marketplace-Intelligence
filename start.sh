@@ -2,16 +2,15 @@
 set -euxo pipefail
 
 export PORT="${PORT:-7860}"
-export STREAMLIT_BROWSER_GATHERUSAGESTATS=false
-
 echo "PORT=$PORT  AGENT_API_URL=${AGENT_API_URL:-unset}"
 
-# Start FastAPI (don’t crash UI if uvicorn missing)
-if command -v uvicorn >/dev/null 2>&1; then
-  uvicorn api.main:app --host 0.0.0.0 --port 7861 &
-else
-  echo "WARN: uvicorn not found; skipping agent API"
-fi
+# Start FastAPI (agent) on 7861
+uvicorn api.main:app --host 0.0.0.0 --port 7861 &
 
-# Start Streamlit on $PORT (HF health check)
-exec python -m streamlit run app.py --server.address 0.0.0.0 --server.port "$PORT"
+# Start Gradio UI on $PORT (no Streamlit)
+if [ -f "ui/gradio_app.py" ]; then
+  exec python -m ui.gradio_app
+else
+  # fallback if you kept Gradio UI in app.py
+  exec python app.py
+fi
