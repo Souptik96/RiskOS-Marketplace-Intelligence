@@ -1,7 +1,8 @@
-import os
-import json
-import requests
+import os, json, requests
 from typing import Any, Dict, Optional, List
+from openai import OpenAI
+from openai.types.chat import ChatCompletion
+from openai._exceptions import NotFoundError, BadRequestError, AuthenticationError
 
 # ---- Fireworks native (defaults match your .env) ----
 FIREWORKS_MODEL = os.getenv("FIREWORKS_MODEL_ID", "accounts/fireworks/models/gpt-oss-20b")
