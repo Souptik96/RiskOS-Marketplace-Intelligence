@@ -1,100 +1,185 @@
 import os
-import requests
 import json
+import requests
+from typing import Any, Dict, Optional, List
 
-# Fireworks native defaults
-FW_KEY = os.getenv("FIREWORKS_API_KEY")
-FW_MODEL = os.getenv("FIREWORKS_MODEL_ID", "accounts/fireworks/models/gpt-oss-20b")
-FW_URL_CHAT = os.getenv("FIREWORKS_URL_CHAT", "https://api.fireworks.ai/inference/v1/chat/completions")
-FW_URL_COMP = os.getenv("FIREWORKS_URL_COMP", "https://api.fireworks.ai/inference/v1/completions")
+# ---- Fireworks native (defaults match your .env) ----
+FIREWORKS_MODEL = os.getenv("FIREWORKS_MODEL_ID", "accounts/fireworks/models/gpt-oss-20b")
+FIREWORKS_URL_CHAT = os.getenv("FIREWORKS_URL_CHAT", "https://api.fireworks.ai/inference/v1/chat/completions")
+FIREWORKS_URL_COMP = os.getenv("FIREWORKS_URL_COMP", "https://api.fireworks.ai/inference/v1/completions")
+
+def _extract_text_from_choices(data: Dict[str, Any]) -> Optional[str]:
+    """
+    Robustly extract assistant text from Fireworks/OpenAI-style responses.
+
+    Tries (in order):
+      - choices[0].message.content (str or list of segments)
+      - choices[0].text (completions-style)
+      - choices[*] concatenate any available text fields (best-effort)
+    """
+    choices: List[Dict[str, Any]] = data.get("choices") or []
+    if not choices:
+        return None
+
+    # Helper to normalize content which may be str or list of dicts/segments
+    def _norm_content(val: Any) -> Optional[str]:
+        if val is None:
+            return None
+        if isinstance(val, str):
+            return val.strip()
+        if isinstance(val, list):
+            parts: List[str] = []
+            for seg in val:
+                if isinstance(seg, str):
+                    parts.append(seg)
+                elif isinstance(seg, dict):
+                    # Common keys used by various providers
+                    txt = seg.get("text") or seg.get("content") or seg.get("value")
+                    if isinstance(txt, str):
+                        parts.append(txt)
+            return ("\n".join(p for p in parts if p.strip())) or None
+        # Unknown structure
+        return None
+
+    # 1) chat style
+    msg = choices[0].get("message")
+    if isinstance(msg, dict):
+        content = _norm_content(msg.get("content"))
+        if content:
+            return content
+
+    # 2) completions style
+    text = choices[0].get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
+    # 3) best-effort scan
+    buf: List[str] = []
+    for ch in choices:
+        if isinstance(ch, dict):
+            # message.content path
+            if isinstance(ch.get("message"), dict):
+                c = _norm_content(ch["message"].get("content"))
+                if c:
+                    buf.append(c)
+            # text path
+            t = ch.get("text")
+            if isinstance(t, str) and t.strip():
+                buf.append(t.strip())
+            # delta.content (streaming shards)
+            delta = ch.get("delta")
+            if isinstance(delta, dict):
+                dc = _norm_content(delta.get("content"))
+                if dc:
+                    buf.append(dc)
+    if buf:
+        return "\n".join(buf).strip()
+
+    return None
+
+
+def _post_fireworks_chat(model: str, prompt: str, max_tokens: int, temperature: float, key: str) -> requests.Response:
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": int(max_tokens),
+        "temperature": float(temperature),
+        "stream": False,
+    }
+    return requests.post(FIREWORKS_URL_CHAT, headers=headers, json=body, timeout=60)
+
+
+def _post_fireworks_completions(model: str, prompt: str, max_tokens: int, temperature: float, key: str) -> requests.Response:
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    body = {
+        "model": model,
+        "prompt": prompt,
+        "max_tokens": int(max_tokens),
+        "temperature": float(temperature),
+        "stream": False,
+    }
+    return requests.post(FIREWORKS_URL_COMP, headers=headers, json=body, timeout=60)
 
 
 def _call_llm(
     prompt: str,
     max_tokens: int = 512,
     temperature: float = 0.2,
-    model: str | None = None,
-    provider: str | None = None,
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> str:
-    """Unified LLM call with explicit provider.
-
-    - fireworks: uses native chat endpoint, falls back to completions on 400/404
-    - hf_router: optional fallback to HF Router OpenAI-style endpoint
-    """
     effective_provider = (provider or os.getenv("LLM_PROVIDER") or "fireworks").lower()
 
     if effective_provider == "fireworks":
-        if not FW_KEY:
-            raise RuntimeError("Set FIREWORKS_API_KEY")
-        mdl = model or FW_MODEL
-        # If a router-style id sneaks in, force native id
-        if isinstance(mdl, str) and (":fireworks-ai" in mdl or not mdl.startswith("accounts/")):
-            mdl = FW_MODEL
-        headers = {"Authorization": f"Bearer {FW_KEY}", "Content-Type": "application/json"}
+        key = os.getenv("FIREWORKS_API_KEY")
+        if not key:
+            raise RuntimeError("Set FIREWORKS_API_KEY for Fireworks provider")
 
-        # 1) Try chat/completions
-        chat_body = {
-            "model": mdl,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": int(max_tokens),
-            "temperature": float(temperature),
-            "stream": False,
-        }
-        r = requests.post(FW_URL_CHAT, headers=headers, json=chat_body, timeout=60)
+        mdl = model or FIREWORKS_MODEL
+
+        # 1) Try chat endpoint first
+        r = _post_fireworks_chat(mdl, prompt, max_tokens, temperature, key)
+
         if r.status_code == 200:
-            j = r.json()
-            return j["choices"][0]["message"]["content"]
+            data = r.json()
+            text = _extract_text_from_choices(data)
+            if text:
+                return text
+            # If chat returned 200 but no content (some models respond oddly), try completions as a fallback
+            rc = _post_fireworks_completions(mdl, prompt, max_tokens, temperature, key)
+            if rc.status_code == 200:
+                data_c = rc.json()
+                text_c = _extract_text_from_choices(data_c)
+                if text_c:
+                    return text_c
+                raise RuntimeError(f"Fireworks completions returned 200 but no text: {json.dumps(data_c)[:800]}")
+            raise RuntimeError(f"Fireworks completions error {rc.status_code}: {rc.text}")
 
-        # 2) Fallback to plain completions
-        if r.status_code in (400, 404):
-            try:
-                err = r.json()
-            except Exception:
-                err = {"error": {"message": r.text}}
-            code = (err.get("error") or {}).get("code", "").lower()
-            msg = (err.get("error") or {}).get("message", "").lower()
-            if "not_found" in code or "model" in msg:
-                comp_body = {
-                    "model": mdl,
-                    "prompt": prompt,
-                    "max_tokens": int(max_tokens),
-                    "temperature": float(temperature),
-                    "stream": False,
-                }
-                rc = requests.post(FW_URL_COMP, headers=headers, json=comp_body, timeout=60)
-                if rc.status_code == 200:
-                    jc = rc.json()
-                    return jc["choices"][0].get("text") or jc["choices"][0]["message"]["content"]
-                raise RuntimeError(f"Fireworks completions error {rc.status_code}: {rc.text}")
+        # For common client errors, retry via completions
+        if r.status_code in (400, 403, 404, 415, 422):
+            rc = _post_fireworks_completions(mdl, prompt, max_tokens, temperature, key)
+            if rc.status_code == 200:
+                data_c = rc.json()
+                text_c = _extract_text_from_choices(data_c)
+                if text_c:
+                    return text_c
+                raise RuntimeError(f"Fireworks completions returned 200 but no text: {json.dumps(data_c)[:800]}")
+            raise RuntimeError(f"Fireworks completions error {rc.status_code}: {rc.text}")
 
-        # Other chat errors
+        # Any other error from chat endpoint
         raise RuntimeError(f"Fireworks chat error {r.status_code}: {r.text}")
 
     elif effective_provider in ("hf_router", "hf"):
-        router_url = os.getenv("HF_ROUTER_URL", "https://router.huggingface.co/v1/chat/completions")
-        router_model = os.getenv("HF_ROUTER_MODEL", "openai/gpt-oss-20b:fireworks-ai")
         token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN")
         if not token:
             raise RuntimeError("Set HF_TOKEN (or HUGGINGFACEHUB_API_TOKEN) for hf_router provider")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         body = {
-            "model": model or router_model,
+            "model": model or HF_ROUTER_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": int(max_tokens),
             "temperature": float(temperature),
             "stream": False,
         }
-        resp = requests.post(router_url, headers=headers, json=body, timeout=60)
+        resp = requests.post(HF_ROUTER_URL, headers=headers, json=body, timeout=60)
         if resp.status_code != 200:
             raise RuntimeError(f"HF Router error {resp.status_code}: {resp.text}")
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        text = _extract_text_from_choices(data)
+        if text:
+            return text
+        raise RuntimeError(f"HF Router returned 200 but no text: {json.dumps(data)[:800]}")
 
     else:
         raise RuntimeError(f"Unsupported LLM_PROVIDER={effective_provider}")
 
 
-def _router_call(prompt: str, max_tokens: int = 512, temperature: float = 0.2, model: str | None = None) -> str:
-    # Back-compat shim
+# Back-compat shim for old callers
+def _router_call(
+    prompt: str,
+    max_tokens: int = 512,
+    temperature: float = 0.2,
+    model: Optional[str] = None
+) -> str:
     return _call_llm(prompt, max_tokens=max_tokens, temperature=temperature, model=model)
-
