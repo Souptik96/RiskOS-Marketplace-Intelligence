@@ -1,4 +1,5 @@
 ﻿# Production dependencies
+ openai>=1.52.0
 gradio
 docker
 pydantic==2.9.2
