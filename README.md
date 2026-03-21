@@ -5,7 +5,7 @@ colorFrom: blue
 colorTo: green
 sdk: docker
 app_port: 7860
-short_description: Natural language to SQL and dashboard API for marketplace analytics.
+short_description: Natural language to SQL API for marketplace analytics.
 ---
 
 # Marketplace Intelligence
