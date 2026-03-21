@@ -1,0 +1,109 @@
+{
+  "test_cases": [
+    {
+      "id": "TC01",
+      "question": "Show me top 10 products by revenue",
+      "expected_sql_contains": ["SELECT", "total_amount", "products", "ORDER BY", "LIMIT"],
+      "expected_min_rows": 1,
+      "expected_chart_type": "bar"
+    },
+    {
+      "id": "TC02",
+      "question": "Revenue by category",
+      "expected_sql_contains": ["category", "SUM", "total_amount"],
+      "expected_min_rows": 1,
+      "expected_chart_type": "bar"
+    },
+    {
+      "id": "TC03",
+      "question": "Monthly revenue trend",
+      "expected_sql_contains": ["strftime", "month", "GROUP BY"],
+      "expected_min_rows": 1,
+      "expected_chart_type": "line"
+    },
+    {
+      "id": "TC04",
+      "question": "Show high risk customers",
+      "expected_sql_contains": ["risk_score", "customers"],
+      "expected_min_rows": 1,
+      "expected_chart_type": null
+    },
+    {
+      "id": "TC05",
+      "question": "What are the most common fraud event types?",
+      "expected_sql_contains": ["fraud_events", "event_type", "COUNT"],
+      "expected_min_rows": 1,
+      "expected_chart_type": "bar"
+    },
+    {
+      "id": "TC06",
+      "question": "Show flagged orders",
+      "expected_sql_contains": ["is_flagged", "orders"],
+      "expected_min_rows": 1,
+      "expected_chart_type": null
+    },
+    {
+      "id": "TC07",
+      "question": "Return rate by category",
+      "expected_sql_contains": ["returns", "category"],
+      "expected_min_rows": 1,
+      "expected_chart_type": null
+    },
+    {
+      "id": "TC08",
+      "question": "Payment method breakdown",
+      "expected_sql_contains": ["payment_method", "COUNT"],
+      "expected_min_rows": 1,
+      "expected_chart_type": null
+    },
+    {
+      "id": "TC09",
+      "question": "Profit margin by category",
+      "expected_sql_contains": ["cost_price", "total_amount", "category"],
+      "expected_min_rows": 1,
+      "expected_chart_type": "bar"
+    },
+    {
+      "id": "TC10",
+      "question": "Low stock products",
+      "expected_sql_contains": ["stock_quantity", "products"],
+      "expected_min_rows": 1,
+      "expected_chart_type": null
+    },
+    {
+      "id": "TC11",
+      "question": "Revenue by country",
+      "expected_sql_contains": ["country", "SUM"],
+      "expected_min_rows": 1,
+      "expected_chart_type": "bar"
+    },
+    {
+      "id": "TC12",
+      "question": "New customer growth by month",
+      "expected_sql_contains": ["customers", "strftime", "month"],
+      "expected_min_rows": 1,
+      "expected_chart_type": "line"
+    },
+    {
+      "id": "TC13",
+      "question": "Top 20 customers by lifetime value",
+      "expected_sql_contains": ["total_lifetime_value", "customers", "ORDER BY"],
+      "expected_min_rows": 1,
+      "expected_chart_type": null
+    },
+    {
+      "id": "TC14",
+      "question": "Average fulfillment time by category",
+      "expected_sql_contains": ["fulfillment_days", "AVG", "category"],
+      "expected_min_rows": 1,
+      "expected_chart_type": "bar"
+    },
+    {
+      "id": "TC15",
+      "question": "Cancelled orders last month",
+      "expected_sql_contains": ["cancelled", "order_date"],
+      "expected_min_rows": 0,
+      "expected_chart_type": null
+    }
+  ]
+}

@@ -1,239 +1,87 @@
 ---
-title: SQL-to-Metrics BI Agent (Marketplace Intelligence)
+title: Marketplace Intelligence
 emoji: 📊
 colorFrom: blue
-colorTo: purple
+colorTo: green
 sdk: docker
-sdk_version: 1.51.0
-app_file: app.py
-pinned: false
-license: apache-2.0
+app_port: 7860
+short_description: Natural language to SQL and dashboard API for marketplace analytics.
 ---
 
 # Marketplace Intelligence
 
-🛒 **Marketplace Intelligence** - AI-powered data analytics platform with dbt integration and automated dashboard generation.
-
 ## Overview
 
-Marketplace Intelligence is a comprehensive data analytics platform that transforms natural language queries into SQL, generates dbt models, and creates interactive dashboards automatically. Built with Streamlit, FastAPI, and dbt, it provides both local and cloud-based data processing capabilities.
+Marketplace Intelligence is a Natural Language to SQL to Dashboard API for marketplace and e-commerce data. It converts plain-English analytics questions into safe SQLite `SELECT` queries, executes them against a bundled marketplace dataset, and returns structured JSON with an inferred chart spec for downstream dashboards or internal tooling.
 
-### Key Features
+## API Reference
 
-- 🗣️ **Natural Language to SQL**: Convert business questions into DuckDB SQL queries
-- 📊 **Auto-Generated Dashboards**: Interactive Streamlit dashboards for any metric
-- 🔧 **dbt Integration**: Generate and run dbt models automatically
-- 🚀 **Dual Architecture**: Both local processing and cloud API support
-- 🐳 **Docker Support**: Containerized deployment with one command
-- 🔄 **CI/CD Pipeline**: Automated testing and deployment
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.11+
-- DuckDB (included with requirements)
-- dbt Core and dbt-DuckDB (included with requirements)
-
-### Local Development
-
-1. **Clone and Setup**
-   ```bash
-   git clone https://huggingface.co/spaces/soupstick/marketplace-intelligence
-   cd marketplace-intelligence
-   ```
-
-2. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Environment Configuration**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your configuration
-   ```
-
-4. **Start Backend** (Terminal 1)
-   ```bash
-   uvicorn api.main:app --host 0.0.0.0 --port 7861
-   ```
-
-5. **Start Frontend** (Terminal 2)
-   ```bash
-   streamlit run app.py --server.port 7860 --server.address 0.0.0.0
-   ```
-
-6. **Open Browser**
-   - **Streamlit UI**: http://localhost:7860
-   - **API Documentation**: http://localhost:7861/docs
-
-### Example Usage
-
-Try these natural language queries:
-
-- "Gross margin by category last quarter"
-- "Top 5 electronics products by revenue in Q3"
-- "Revenue trends over time by product category"
-- "Average order value by category"
-
-### Generate Custom Metrics
-
-Use the **"Generate Metric (dbt + Dashboard)"** sidebar section:
-
-1. Enter your business question (e.g., "Customer lifetime value by acquisition channel")
-2. Optionally specify a metric slug (e.g., "clv_by_channel")
-3. Click "Generate Metric"
-4. View the preview table and auto-generated dashboard
-
-## Docker Deployment
-
-### Build and Run
+`POST /api/v1/query`
 
 ```bash
-# Build the Docker image
-docker build -t marketplace-intelligence .
-
-# Run with exposed ports
-docker run -p 7860:7860 -p 7861:7861 marketplace-intelligence
+curl -s -X POST http://localhost:7860/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Show me top 10 products by revenue"}'
 ```
 
-### Docker Compose (Optional)
+`POST /api/v1/sql/validate`
 
 ```bash
-# Create docker-compose.yml
-cat > docker-compose.yml << 'EOF'
-version: '3.8'
-services:
-  marketplace-intelligence:
-    build: .
-    ports:
-      - "7860:7860"
-      - "7861:7861"
-    environment:
-      - AGENT_API_URL=http://localhost:7861
-      - DBT_PROFILES_DIR=./dbt_project/profiles
-EOF
-
-# Run with compose
-docker-compose up
+curl -s -X POST http://localhost:7860/api/v1/sql/validate \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "SELECT * FROM orders"}'
 ```
 
-## Architecture
-
-### Components
-
-- **Streamlit Frontend** (`app.py`): Interactive UI with natural language query interface
-- **FastAPI Backend** (`api/main.py`): RESTful API with agent orchestration
-- **LangGraph Agent** (`agent/`): AI-powered workflow for metric generation
-- **dbt Integration** (`dbt_project/`): Data transformation and modeling
-- **Dashboard Scaffold** (`tools/viz_scaffold.py`): Auto-generation of Streamlit dashboards
-
-### Data Flow
-
-1. User enters natural language query
-2. Query is sent to FastAPI backend
-3. LangGraph agent processes the request:
-   - Parses intent
-   - Generates SQL
-   - Validates and executes
-   - Creates dbt model
-   - Runs dbt transformations
-4. Results are returned to frontend
-5. Dashboard is auto-generated for the metric
-
-## Development
-
-### Branching Strategy
+`GET /api/v1/schema`
 
 ```bash
-# Create feature branch
-git checkout -b feature/your-feature-name
-
-# Push and create PR
-git push -u origin feature/your-feature-name
+curl -s http://localhost:7860/api/v1/schema
 ```
 
-### Running Tests
+`GET /api/v1/examples`
 
 ```bash
-# Run all tests
-pytest -q tests/
-
-# Run dbt tests
-cd dbt_project
-dbt test --project-dir . --profiles-dir ./profiles
+curl -s http://localhost:7860/api/v1/examples
 ```
 
-### Environment Variables
+`GET /health`
 
-Key environment variables (see `.env.example`):
-
-- `AGENT_API_URL`: Backend API endpoint (default: `http://localhost:7861`)
-- `DBT_PROFILES_DIR`: dbt profiles directory (default: `./dbt_project/profiles`)
-- `LLM_PROVIDER`: LLM provider (`fireworks` or `hf`)
-- `FIREWORKS_API_KEY`: Fireworks API key (if using Fireworks)
-- `HF_API_KEY`: Hugging Face API key (if using HF)
-
-## Contributing
-
-We welcome contributions! Please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit your changes: `git commit -m 'Add amazing feature'`
-4. Push to the branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
-
-### Development Guidelines
-
-- Follow PEP 8 for Python code
-- Add tests for new features
-- Update documentation for API changes
-- Ensure CI passes before merging
-
-## Troubleshooting
-
-### Common Issues
-
-**Backend not responding**:
 ```bash
-# Check if FastAPI is running
-curl http://localhost:7861/health
-
-# Check logs
-python -c "from api.main import app; print('API imports successfully')"
+curl -s http://localhost:7860/health
 ```
 
-**Dashboard creation fails**:
+## Example Queries
+
+- Show me top 10 products by revenue
+- What is our revenue by category this year?
+- Show monthly revenue trend for the last 12 months
+- Which customers have the highest risk scores?
+- What are the most common fraud event types?
+- Show me all flagged orders over $500
+- What is the return rate by category?
+- Which payment methods are most popular?
+- Show profit margin by product category
+- What is the average fulfillment time by category?
+
+## Local Development
+
 ```bash
-# Check dbt installation
-dbt --version
-
-# Verify profiles directory
-ls -la dbt_project/profiles/
-
-# Test dashboard generation manually
-python -c "from tools.viz_scaffold import make_dashboard; print('OK')"
+git clone https://huggingface.co/spaces/soupstick/marketplace-intelligence
+cd marketplace-intelligence
+pip install -r requirements.txt
+python scripts/setup_db.py
+uvicorn app.main:app --host 0.0.0.0 --port 7860
 ```
 
-**Environment variables not loading**:
-```bash
-# Check .env file
-cat .env
+## Database
 
-# Test loading
-python -c "from dotenv import load_dotenv; load_dotenv(); import os; print(os.getenv('AGENT_API_URL'))"
-```
+- `database/marketplace.db` is generated by `python scripts/setup_db.py` locally and during the Docker build in Hugging Face Spaces.
+- `products`: catalog metadata, pricing, margin signal, inventory, and suppliers. Row count: 200.
+- `customers`: country, region, segment, tenure, lifetime value, and risk score attributes. Row count: 1000.
+- `orders`: order facts with pricing, status, payment method, flags, and fulfillment timing across the last 24 months. Row count: 15000.
+- `returns`: return records linked to returned orders, refund amounts, and reasons. Row count: 1500.
+- `fraud_events`: high-risk customer fraud incidents with event type, amount at risk, and resolution state. Row count: 200.
 
-## License
+## Note
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- **Streamlit**: For the excellent UI framework
-- **FastAPI**: For the high-performance API framework
-- **dbt**: For data transformation best practices
-- **DuckDB**: For fast analytical queries
-- **LangGraph**: For AI workflow orchestration
+Setting `LLM_API_KEY` enables GPT-powered NL→SQL generation. Without it, rule-based matching handles 20 common query patterns. Core functionality works without any external service dependency.

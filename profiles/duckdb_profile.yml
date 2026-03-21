@@ -1,9 +1,0 @@
-duckdb_profile:
-  target: dev
-  outputs:
-    dev:
-      type: duckdb
-      path: data/metrics.duckdb
-      schema: main
-      threads: 1
-
