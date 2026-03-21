@@ -3,6 +3,7 @@ import uuid
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from app.chart_builder import build_chart_spec
 from app.nl_to_sql import convert_to_sql
@@ -24,6 +25,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/docs", status_code=307)
 
 
 @app.get("/health")

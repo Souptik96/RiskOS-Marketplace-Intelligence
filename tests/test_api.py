@@ -13,6 +13,12 @@ with open("tests/fixtures/test_queries.json", encoding="utf-8") as fixture_file:
     test_cases = json.load(fixture_file)["test_cases"]
 
 
+def test_root_redirects_to_docs():
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/docs"
+
+
 def test_health():
     response = client.get("/health")
     assert response.status_code == 200
