@@ -52,6 +52,29 @@ def query(request: QueryRequest):
     start = time.time()
     query_id = str(uuid.uuid4())
 
+    # Block direct SQL injection attempts before NL conversion
+    question_stripped = request.question.strip()
+    if question_stripped:
+        first_word = question_stripped.split()[0].upper()
+        blocked_keywords = {
+            "DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "TRUNCATE",
+            "REPLACE", "ATTACH", "DETACH", "PRAGMA", "VACUUM", "EXEC", "EXECUTE"
+        }
+        if first_word in blocked_keywords:
+            return QueryResponse(
+                query_id=query_id,
+                natural_language_input=request.question,
+                generated_sql=request.question,
+                sql_source="blocked",
+                sql_valid=False,
+                result_rows=0,
+                data=[],
+                chart_type=None,
+                chart_spec=None,
+                latency_ms=int((time.time() - start) * 1000),
+                error=f"Direct SQL injection blocked. Statement type '{first_word}' not allowed. Only SELECT queries are permitted.",
+            )
+
     sql_result = convert_to_sql(request.question)
     raw_sql = sql_result["sql"]
     sql_source = sql_result["source"]

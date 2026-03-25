@@ -1,0 +1,12 @@
+[
+    {"sql": "SELECT * FROM orders", "expected_valid": true},
+    {"sql": "DROP TABLE orders", "expected_valid": false, "reason": "Forbidden keyword: DROP"},
+    {"sql": "DELETE FROM customers", "expected_valid": false, "reason": "Forbidden keyword: DELETE"},
+    {"sql": "INSERT INTO products (name) VALUES ('hacked')", "expected_valid": false, "reason": "Only SELECT statements allowed"},
+    {"sql": "UPDATE customers SET risk_score = 0", "expected_valid": false, "reason": "Only SELECT statements allowed"},
+    {"sql": "SELECT * FROM orders; DROP TABLE products", "expected_valid": false, "reason": "Only single SELECT statements are allowed"},
+    {"sql": "SELECT * FROM orders -- comment to bypass", "expected_valid": true, "expected_logic": "Comment should be stripped"},
+    {"sql": "SELECT * FROM orders LIMIT 1000", "expected_valid": true, "expected_logic": "Limit should be capped at 500"},
+    {"sql": "PRAGMA table_info(orders)", "expected_valid": false, "reason": "Forbidden keyword: PRAGMA"},
+    {"sql": "SELECT password FROM users", "expected_valid": true, "expected_error": "SQL parse error (table users doesn't exist)"}
+]

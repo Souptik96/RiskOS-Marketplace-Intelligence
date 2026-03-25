@@ -46,7 +46,10 @@ def validate_sql(sql: str) -> Tuple[bool, str]:
     if not sql or not sql.strip():
         return False, "Empty SQL"
 
-    candidate = sql.strip()
+    # Strip SQL comments
+    candidate = re.sub(r'--.*?\n', ' ', sql)
+    candidate = re.sub(r'/\*.*?\*/', ' ', candidate, flags=re.DOTALL)
+    candidate = candidate.strip()
 
     try:
         parsed = sqlglot.parse(candidate, read="sqlite")

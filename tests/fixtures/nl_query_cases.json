@@ -1,0 +1,12 @@
+[
+    {"question": "What is our total revenue for completed orders?", "expected_keywords": ["SUM", "total_amount", "completed"]},
+    {"question": "Show revenue by product category", "expected_keywords": ["category", "SUM", "GROUP BY"]},
+    {"question": "Show monthly sales for the last 12 months", "expected_keywords": ["strftime", "order_date", "-12 months"]},
+    {"question": "List all flagged orders over $1000", "expected_keywords": ["is_flagged", "1", "1000"]},
+    {"question": "Show me customers with risk scores above 0.8", "expected_keywords": ["risk_score", "0.8"]},
+    {"question": "Top 5 products by quantity sold", "expected_keywords": ["quantity", "ORDER BY", "DESC", "LIMIT 5"]},
+    {"question": "What are the top 3 reasons for returns?", "expected_keywords": ["return_reason", "COUNT", "LIMIT 3"]},
+    {"question": "Total amount refunded this year", "expected_keywords": ["SUM", "refund_amount", "strftime"]},
+    {"question": "Which 5 countries generate the most revenue?", "expected_keywords": ["country", "SUM", "LIMIT 5"]},
+    {"question": "What are the most profitable product categories?", "expected_keywords": ["category", "cost_price", "SUM"]}
+]
