@@ -24,36 +24,25 @@ RiskOS Marketplace Intelligence replaces the manual, time-consuming process of w
 
 ### How It Works
 
-Natural Language Question
-│
-▼
-**NL → SQL Conversion**
-├── **Mode A**: GPT-4o-mini (highly accurate, requires `LLM_API_KEY`)
-└── **Mode B**: Rule-based keyword matching (20+ patterns, zero-config)
-│
-▼
-**SQL Safety Validator**           ← SECURITY GATE
-├── SELECT-only whitelist
-├── Blocks: `DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, `PRAGMA`, etc.
-├── Enforces `LIMIT 500`
-└── Strips SQL comments (injection prevention)
-│
-▼
-**SQLite Query Runner**
-├── 10-second timeout
-└── Max 500 rows returned
-│
-▼
-**Chart Builder**
-├── Infers: bar / line / pie / table
-└── Returns Plotly-compatible spec
-│
-▼
-**Structured JSON Response**
-├── generated_sql
-├── result_rows + data[]
-├── chart_type + chart_spec
-└── latency_ms
+```mermaid
+graph TD
+    A["Natural Language Question"] --> B["NL → SQL Conversion"]
+    B --> B1["Mode A: GPT-4o-mini (highly accurate)"]
+    B --> B2["Mode B: Rule-based (zero-config)"]
+    B1 & B2 --> C["SQL Safety Validator (SECURITY GATE)"]
+    C --> C1["SELECT-only whitelist"]
+    C --> C2["Block: DROP, DELETE, INSERT, etc."]
+    C --> C3["Enforce LIMIT 500"]
+    C --> C4["Strip SQL comments"]
+    C1 & C2 & C3 & C4 --> D["SQLite Query Runner"]
+    D --> D1["10-second timeout"]
+    D --> D2["Max 500 rows returned"]
+    D1 & D2 --> E["Chart Builder"]
+    E --> E1["Infers: bar / line / pie / table"]
+    E --> E2["Returns Plotly-compatible spec"]
+    E1 & E2 --> F["Structured JSON Response"]
+    F --> F1["sql, result_rows, chart_spec, latency"]
+```
 
 ---
 
