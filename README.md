@@ -5,6 +5,12 @@
 > charts. Features a multi-stage SQL safety gate, hybrid rule/LLM engine, and
 > automated high-fidelity data seeding.
 
+![HF Space](https://img.shields.io/badge/🤗%20HuggingFace-Live%20Demo-yellow?style=flat-square)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.111-green?style=flat-square)
+![SQLite](https://img.shields.io/badge/SQLite-Embedded-lightblue?style=flat-square)
+![Security](https://img.shields.io/badge/SQL-SELECT%20Only-red?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-lightgrey?style=flat-square)
+
 **Live Demo:** https://huggingface.co/spaces/soupstick/marketplace-intelligence
 **API Docs:** https://soupstick-marketplace-intelligence.hf.space/docs
 
